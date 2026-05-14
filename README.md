@@ -11,6 +11,22 @@ By default, setup is safe for established repositories:
 - Managed files can be previewed without changes (`--dry-run`).
 - The script runs `pixi install` and `pixi run bootstrap` unless `--skip-pixi` is used.
 
+## Getting Started
+
+1. **Run setup** in your repository:
+   ```powershell
+   python setup_notebook_workflow.py
+   ```
+
+2. **Commit the generated workflow files** to establish a clean baseline before adding notebooks:
+   ```powershell
+   git add pyproject.toml tooling/ notebook_workflow_config.json
+   git commit -m "Set up notebook workflow with Pixi + Jupytext"
+   ```
+   This separates infrastructure changes from your notebook content changes, making git history clearer and updates easier.
+
+3. **Create and sync notebooks** as you normally would.
+
 ## Tooling layout
 
 Workflow implementation files are isolated under `tooling/notebook_workflow/` so they are clearly infrastructure, not project code.
