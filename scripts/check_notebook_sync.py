@@ -8,11 +8,11 @@ import jupytext
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_DIR = ROOT / "notebooks"
+TEXT_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
 
 
 def tracked_text_notebooks() -> list[Path]:
-    return sorted(path for path in NOTEBOOK_DIR.rglob("*.py") if path.is_file())
+    return sorted(path for path in TEXT_NOTEBOOK_DIR.rglob("*.py") if path.is_file())
 
 
 def main() -> int:

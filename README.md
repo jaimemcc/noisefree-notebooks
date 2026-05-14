@@ -19,7 +19,7 @@ python scripts/bootstrap_notebook_workflow.py
 
 ## Notebook policy
 
-- Keep notebook source in `notebooks/` as `py:percent` text notebooks.
+- Keep notebook source in `notebooks/text/` as `py:percent` text notebooks.
 - Treat `.ipynb` files in managed notebook paths as generated local artifacts.
 - Run `pixi run check-notebook-policy` before committing if you want a manual check.
 - Run `pixi run check-notebook-sync` to verify tracked text notebooks still round-trip cleanly.
@@ -27,4 +27,4 @@ python scripts/bootstrap_notebook_workflow.py
 
 ## Starter notebook
 
-The repository includes [notebooks/starter_notebook.py](notebooks/starter_notebook.py) as a working example of the text-first notebook format.
+The repository includes [notebooks/text/starter_notebook.py](notebooks/text/starter_notebook.py) as a working example of the text-first notebook format.
