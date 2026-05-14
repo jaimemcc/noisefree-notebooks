@@ -1,0 +1,18 @@
+[tool.jupytext]
+formats = "py:percent,ipynb"
+
+[tool.pixi.workspace]
+name = "nbtest"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tool.pixi.pypi-dependencies]
+jupytext = ">=1.16"
+pre-commit = ">=3.7"
+
+[tool.pixi.tasks]
+bootstrap = "pre-commit install"
+check-notebook-policy = "python scripts/check_notebook_policy.py"
+check-notebook-sync = "python scripts/check_notebook_sync.py"
+check-notebooks = { depends-on = ["check-notebook-policy", "check-notebook-sync"] }
+sync-notebooks = "python scripts/sync_notebooks.py"
