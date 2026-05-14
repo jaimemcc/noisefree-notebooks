@@ -7,12 +7,12 @@ import jupytext
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_NOTEBOOK_DIR = ROOT / "notebooks" / "source"
+NOTEBOOK_DIR = ROOT / "notebooks"
 TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
 
 
 def source_notebooks() -> list[Path]:
-    return sorted(path for path in SOURCE_NOTEBOOK_DIR.rglob("*.ipynb") if path.is_file())
+    return sorted(path for path in NOTEBOOK_DIR.glob("*.ipynb") if path.is_file())
 
 
 def main() -> int:
@@ -22,7 +22,7 @@ def main() -> int:
         return 0
 
     for source_notebook in notebooks:
-        relative_path = source_notebook.relative_to(SOURCE_NOTEBOOK_DIR).with_suffix(".py")
+        relative_path = source_notebook.relative_to(NOTEBOOK_DIR).with_suffix(".py")
         target_notebook = TRACKED_NOTEBOOK_DIR / relative_path
 
         if not target_notebook.exists():

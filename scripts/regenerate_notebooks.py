@@ -8,7 +8,7 @@ import jupytext
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_NOTEBOOK_DIR = ROOT / "notebooks" / "source"
+NOTEBOOK_DIR = ROOT / "notebooks"
 TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
 
 
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for tracked_notebook in notebooks:
         relative_path = tracked_notebook.relative_to(TRACKED_NOTEBOOK_DIR).with_suffix(".ipynb")
-        source_notebook = SOURCE_NOTEBOOK_DIR / relative_path
+        source_notebook = NOTEBOOK_DIR / relative_path
         source_notebook.parent.mkdir(parents=True, exist_ok=True)
 
         notebook_object = jupytext.read(tracked_notebook, fmt="py:percent")
