@@ -283,6 +283,44 @@ def test_generated_script_syntax():
     return all_ok
 
 
+def test_generated_tooling_script_syntax():
+    """Ensure setup generates tooling scripts with valid Python syntax."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root = Path(tmpdir)
+
+        setup_script = Path("setup_notebook_workflow.py")
+        if setup_script.exists():
+            shutil.copy(setup_script, test_root / "setup_notebook_workflow.py")
+
+        result = subprocess.run(
+            [sys.executable, "setup_notebook_workflow.py", "--skip-pixi", "--on-existing", "overwrite"],
+            cwd=test_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+
+        if result.returncode != 0:
+            print("❌ setup_notebook_workflow.py failed while generating tooling scripts:")
+            print(result.stderr)
+            return False
+
+        generated_script = test_root / "tooling" / "notebook_workflow" / "migrate_existing_notebooks.py"
+        compile_result = subprocess.run(
+            [sys.executable, "-m", "py_compile", str(generated_script)],
+            capture_output=True,
+            text=True,
+        )
+        if compile_result.returncode != 0:
+            print("❌ Generated migrate_existing_notebooks.py has invalid syntax:")
+            print(compile_result.stderr)
+            return False
+
+        print("✓ generated tooling scripts have valid syntax")
+        return True
+
+
 def test_import_setup_module():
     """Test that setup_notebook_workflow can be imported."""
     try:
@@ -326,6 +364,7 @@ def main():
     tests = [
         ("Syntax check", test_setup_script_syntax),
         ("Generated script syntax", test_generated_script_syntax),
+        ("Generated tooling script syntax", test_generated_tooling_script_syntax),
         ("Import setup_notebook_workflow", test_import_setup_module),
         ("Import update_notebook_workflow", test_import_update_module),
         ("Help output", test_setup_script_help),
