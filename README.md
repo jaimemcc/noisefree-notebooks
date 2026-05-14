@@ -19,6 +19,10 @@ Workflow implementation files are isolated under `tooling/notebook_workflow/` so
 - `scripts/` contains compatibility wrappers only.
 - New repositories created with `setup_notebook_workflow.py` now generate workflow scripts under `tooling/notebook_workflow/`.
 
+## Roadmap
+
+Planned future work is tracked in [TODO.md](TODO.md), including the workflow/package update strategy across repositories.
+
 ## Setup options
 
 ### Option A: default setup (recommended)
