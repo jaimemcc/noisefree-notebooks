@@ -687,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  3. If migrating existing repos: pixi run preview-untrack-managed-notebooks")
     print(f"  4. Or run full migration: pixi run migrate-existing-notebooks")
     print(f"  5. Commit: git add {args.notebook_dir}/{args.tracked_dir}/")
-    print("  6. For more info, see SETUP_INSTRUCTIONS.md or NOTEBOOK_WORKFLOW.md")
+    print("  6. For more info, see README.md")
     print("=" * 60 + "\n")
 
     return 0
