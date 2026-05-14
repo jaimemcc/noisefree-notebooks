@@ -14,14 +14,19 @@ python setup_notebook_workflow.py
 
 # Or with custom directories:
 python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+
+# Existing repo (safe mode): keep existing config, only create missing files
+python setup_notebook_workflow.py --on-existing skip
 ```
 
 This script automatically creates:
 - ✅ Directory structure
 - ✅ All config files (pyproject.toml, .gitignore, .pre-commit-config.yaml)
-- ✅ All scripts (sync, check, regen, bootstrap)
+- ✅ All scripts (sync, check, regen, policy, untrack-migration)
 - ✅ GitHub Actions workflow
 - ✅ Runs `pixi install` and `pixi run bootstrap`
+
+By default, existing managed files are preserved (`--on-existing skip`) so setup is safer in established repositories.
 
 **Then you're done.** Just create your first notebook and run `pixi run sync`.
 
@@ -402,10 +407,10 @@ git commit -m "initial notebook workflow setup"
 
 ```powershell
 # Copy setup_notebook_workflow.py to your repo root, then:
-python setup_notebook_workflow.py
+python setup_notebook_workflow.py --on-existing skip
 ```
 
-This sets up all the workflow files automatically. Then continue with Step 3 below to migrate your existing notebooks.
+This sets up missing workflow files while keeping existing config intact. Then continue with Step 3 below to migrate your existing notebooks.
 
 ### Option B: Manual Setup
 
@@ -441,7 +446,17 @@ Move-Item notebooks/analysis.ipynb notebooks/
 pixi install
 pixi run sync
 # Check notebooks/text/analysis.py
-Remove-Item notebooks/analysis.ipynb  # Keep only the .py tracked
+# Preview tracked notebook JSON files in git
+pixi run preview-untrack-managed-notebooks
+
+# Untrack managed notebook JSON files from git index
+pixi run untrack-managed-notebooks
+
+# One-command migration (preview only)
+pixi run migrate-existing-notebooks-preview
+
+# One-command migration (apply untracking + sync + checks)
+pixi run migrate-existing-notebooks
 ```
 
 #### Step 4: Initialize Pixi and bootstrap (Manual Setup Only)
@@ -516,6 +531,14 @@ The script updates **all** configuration files and Python scripts automatically�
 | `--notebook-dir` | `notebooks` | Directory for source `.ipynb` files |
 | `--tracked-dir` | `text` | Subdirectory within notebook-dir for tracked `.py` files |
 | `--skip-pixi` | — | Skip `pixi install` and bootstrap (useful for testing/CI) |
+| `--on-existing` | `skip` | How to handle existing managed files: `skip`, `overwrite`, or `fail` |
+| `--dry-run` | — | Preview all setup changes without writing files or running Pixi |
+
+### Migration safety flags
+
+- `scripts/untrack_managed_notebooks.py` requires `--apply --yes` to modify the git index.
+- `pixi run untrack-managed-notebooks` already includes `--apply --yes`.
+- `pixi run migrate-existing-notebooks` runs untrack + sync + checks in sequence.
 
 ### Example: Multi-project Setup
 
@@ -547,7 +570,9 @@ my-repo/
 │   ├── sync_notebooks.py            (convert .ipynb → .py)
 │   ├── check_notebook_sync.py       (validate sync)
 │   ├── check_notebook_policy.py     (enforce policy)
-│   └── regenerate_notebooks.py      (convert .py → .ipynb)
+│   ├── regenerate_notebooks.py      (convert .py → .ipynb)
+│   ├── untrack_managed_notebooks.py (untrack managed .ipynb files from git index)
+│   └── migrate_existing_notebooks.py (guided migration for established repos)
 ├── notebooks/                       (configurable with --notebook-dir)
 │   ├── analysis.ipynb               (local, never committed)
 │   ├── exploration.ipynb            (local, never committed)

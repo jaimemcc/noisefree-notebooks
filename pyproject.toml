@@ -17,6 +17,10 @@ check-notebook-sync = "python scripts/check_notebook_sync.py"
 check-notebooks = { depends-on = ["check-notebook-policy", "check-notebook-sync"] }
 sync-notebooks = "python scripts/sync_notebooks.py"
 regenerate-notebooks = "python scripts/regenerate_notebooks.py"
+untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py --apply --yes"
+preview-untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py"
+migrate-existing-notebooks-preview = "python scripts/migrate_existing_notebooks.py"
+migrate-existing-notebooks = "python scripts/migrate_existing_notebooks.py --apply-untrack --yes"
 # Aliases for convenience
 sync = { depends-on = ["sync-notebooks"] }
 regen = { depends-on = ["regenerate-notebooks"] }

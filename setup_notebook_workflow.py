@@ -17,7 +17,36 @@ from pathlib import Path
 from textwrap import dedent
 
 
-def create_pyproject_toml(root: Path, notebook_dir: str, tracked_dir: str) -> None:
+def write_text_file(path: Path, content: str, *, on_existing: str, dry_run: bool) -> str:
+    """Write file content with configurable behavior for existing files."""
+    existed_before = path.exists()
+
+    if existed_before:
+        if on_existing == "skip":
+            return "skipped"
+        if on_existing == "fail":
+            raise FileExistsError(f"Refusing to overwrite existing file: {path}")
+
+    if dry_run:
+        return "would-overwrite" if existed_before else "would-create"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return "overwritten" if existed_before else "created"
+
+
+def report_write(path: Path, status: str) -> None:
+    labels = {
+        "created": "✓ Created",
+        "overwritten": "✓ Updated",
+        "skipped": "• Skipped existing",
+        "would-create": "• Dry run would create",
+        "would-overwrite": "• Dry run would update",
+    }
+    print(f"{labels.get(status, '•')} {path}")
+
+
+def create_pyproject_toml(root: Path, notebook_dir: str, tracked_dir: str, *, on_existing: str, dry_run: bool) -> None:
     """Generate pyproject.toml with Pixi and Jupytext configuration."""
     content = f'''\
 [tool.jupytext]
@@ -39,16 +68,21 @@ check-notebook-sync = "python scripts/check_notebook_sync.py"
 check-notebooks = {{ depends-on = ["check-notebook-policy", "check-notebook-sync"] }}
 sync-notebooks = "python scripts/sync_notebooks.py"
 regenerate-notebooks = "python scripts/regenerate_notebooks.py"
+untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py --apply --yes"
+preview-untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py"
+migrate-existing-notebooks-preview = "python scripts/migrate_existing_notebooks.py"
+migrate-existing-notebooks = "python scripts/migrate_existing_notebooks.py --apply-untrack --yes"
 # Aliases for convenience
 sync = {{ depends-on = ["sync-notebooks"] }}
 regen = {{ depends-on = ["regenerate-notebooks"] }}
 check = {{ depends-on = ["check-notebooks"] }}
 '''
-    (root / "pyproject.toml").write_text(content)
-    print("✓ Created pyproject.toml")
+    target = root / "pyproject.toml"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
 
 
-def create_gitignore(root: Path, notebook_dir: str) -> None:
+def create_gitignore(root: Path, notebook_dir: str, *, on_existing: str, dry_run: bool) -> None:
     """Generate .gitignore that ignores .ipynb but tracks .py."""
     content = f'''\
 {notebook_dir}/*.ipynb
@@ -58,11 +92,12 @@ def create_gitignore(root: Path, notebook_dir: str) -> None:
 .pixi/*
 !.pixi/config.toml
 '''
-    (root / ".gitignore").write_text(content)
-    print("✓ Created .gitignore")
+    target = root / ".gitignore"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
 
 
-def create_precommit_config(root: Path) -> None:
+def create_precommit_config(root: Path, *, on_existing: str, dry_run: bool) -> None:
     """Generate .pre-commit-config.yaml with Pixi-routed hooks."""
     content = '''\
 repos:
@@ -79,14 +114,16 @@ repos:
         language: system
         pass_filenames: false
 '''
-    (root / ".pre-commit-config.yaml").write_text(content)
-    print("✓ Created .pre-commit-config.yaml")
+    target = root / ".pre-commit-config.yaml"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
 
 
-def create_github_workflow(root: Path) -> None:
+def create_github_workflow(root: Path, *, on_existing: str, dry_run: bool) -> None:
     """Generate GitHub Actions workflow for CI."""
     workflow_dir = root / ".github" / "workflows"
-    workflow_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        workflow_dir.mkdir(parents=True, exist_ok=True)
 
     content = '''\
 name: notebook-policy
@@ -114,14 +151,16 @@ jobs:
       - name: Check notebook workflow
         run: pixi run check-notebooks
 '''
-    (workflow_dir / "notebook-policy.yml").write_text(content)
-    print("✓ Created .github/workflows/notebook-policy.yml")
+    target = workflow_dir / "notebook-policy.yml"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
 
 
-def create_scripts(root: Path, notebook_dir: str, tracked_dir: str) -> None:
-    """Generate all four Python scripts with proper path configuration."""
+def create_scripts(root: Path, notebook_dir: str, tracked_dir: str, *, on_existing: str, dry_run: bool) -> None:
+    """Generate workflow scripts with proper path configuration."""
     scripts_dir = root / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        scripts_dir.mkdir(parents=True, exist_ok=True)
 
     # Script 1: sync_notebooks.py
     sync_script = f'''\
@@ -138,7 +177,14 @@ TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
 
 
 def source_notebooks() -> list[Path]:
-    return sorted(path for path in NOTEBOOK_DIR.glob("*.ipynb") if path.is_file())
+    notebooks: list[Path] = []
+    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
+        if not path.is_file():
+            continue
+        if TRACKED_NOTEBOOK_DIR in path.parents:
+            continue
+        notebooks.append(path)
+    return sorted(notebooks)
 
 
 def main() -> int:
@@ -162,7 +208,9 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
-    (scripts_dir / "sync_notebooks.py").write_text(sync_script)
+    sync_target = scripts_dir / "sync_notebooks.py"
+    sync_status = write_text_file(sync_target, sync_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(sync_target, sync_status)
 
     # Script 2: check_notebook_sync.py
     check_sync_script = f'''\
@@ -180,7 +228,14 @@ TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
 
 
 def source_notebooks() -> list[Path]:
-    return sorted(path for path in NOTEBOOK_DIR.glob("*.ipynb") if path.is_file())
+    notebooks: list[Path] = []
+    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
+        if not path.is_file():
+            continue
+        if TRACKED_NOTEBOOK_DIR in path.parents:
+            continue
+        notebooks.append(path)
+    return sorted(notebooks)
 
 
 def main() -> int:
@@ -217,7 +272,9 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
-    (scripts_dir / "check_notebook_sync.py").write_text(check_sync_script)
+    check_sync_target = scripts_dir / "check_notebook_sync.py"
+    check_sync_status = write_text_file(check_sync_target, check_sync_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(check_sync_target, check_sync_status)
 
     # Script 3: regenerate_notebooks.py
     regen_script = f'''\
@@ -275,7 +332,9 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
-    (scripts_dir / "regenerate_notebooks.py").write_text(regen_script)
+    regen_target = scripts_dir / "regenerate_notebooks.py"
+    regen_status = write_text_file(regen_target, regen_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(regen_target, regen_status)
 
     # Script 4: check_notebook_policy.py
     policy_script = f'''\
@@ -329,15 +388,201 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
-    (scripts_dir / "check_notebook_policy.py").write_text(policy_script)
+    policy_target = scripts_dir / "check_notebook_policy.py"
+    policy_status = write_text_file(policy_target, policy_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(policy_target, policy_status)
 
-    print("✓ Created 4 scripts in scripts/")
+    untrack_script = f'''\
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
 
 
-def create_directories(root: Path, notebook_dir: str, tracked_dir: str) -> None:
+ROOT = Path(__file__).resolve().parents[1]
+MANAGED_NOTEBOOK_DIR = ROOT / "{notebook_dir}"
+
+
+def tracked_managed_notebooks() -> list[str]:
+    completed = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    tracked: list[str] = []
+    for line in completed.stdout.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        candidate = ROOT / path
+        if candidate.suffix.lower() == ".ipynb" and MANAGED_NOTEBOOK_DIR in candidate.parents:
+            tracked.append(path)
+    return sorted(tracked)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="List or untrack managed .ipynb files currently tracked by git.",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Run git rm --cached on matched files. Without this flag, only preview changes.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Required with --apply to confirm untracking changes in git index.",
+    )
+    args = parser.parse_args(argv)
+
+    tracked = tracked_managed_notebooks()
+    if not tracked:
+        print("No tracked managed .ipynb files found.")
+        return 0
+
+    print("Managed .ipynb files currently tracked by git:")
+    for path in tracked:
+        print(f"  - {{path}}")
+    print(f"\\nTotal tracked managed notebooks: {{len(tracked)}}")
+
+    if not args.apply:
+        print("\nPreview mode only. Re-run with --apply to untrack these files.")
+        return 0
+
+    if not args.yes:
+        print("\\nRefusing to apply without explicit confirmation.", file=sys.stderr)
+        print("Re-run with: --apply --yes", file=sys.stderr)
+        return 2
+
+    command = ["git", "rm", "--cached", "--", *tracked]
+    completed = subprocess.run(command, cwd=ROOT)
+    if completed.returncode != 0:
+        print("Failed to untrack one or more files.", file=sys.stderr)
+        return completed.returncode
+
+    print("\nUntracked managed .ipynb files from git index.")
+    print("Run 'pixi run sync' and commit the updated tracked .py files.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+    untrack_target = scripts_dir / "untrack_managed_notebooks.py"
+    untrack_status = write_text_file(untrack_target, untrack_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(untrack_target, untrack_status)
+
+    migrate_script = '''\
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+from untrack_managed_notebooks import tracked_managed_notebooks
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_step(command: list[str], *, step_name: str) -> int:
+    print(f"\\n[{step_name}] {' '.join(command)}")
+    completed = subprocess.run(command, cwd=ROOT)
+    if completed.returncode != 0:
+        print(f"Step failed: {step_name}", file=sys.stderr)
+    return completed.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Migrate existing repositories to the notebook text-first workflow: "
+            "preview/untrack tracked managed .ipynb files, then sync and validate."
+        ),
+    )
+    parser.add_argument(
+        "--apply-untrack",
+        action="store_true",
+        help="Apply git rm --cached to tracked managed .ipynb files. Without this flag, preview only.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Required with --apply-untrack to confirm index changes.",
+    )
+    args = parser.parse_args(argv)
+
+    tracked = tracked_managed_notebooks()
+    if tracked:
+        print("Managed .ipynb files currently tracked by git:")
+        for path in tracked:
+            print(f"  - {path}")
+        print(f"\\nTotal tracked managed notebooks: {len(tracked)}")
+
+        if not args.apply_untrack:
+            print("\\nPreview mode only. Re-run with --apply-untrack --yes to untrack these files.")
+            return 0
+
+        if not args.yes:
+            print("\\nRefusing to apply without explicit confirmation.", file=sys.stderr)
+            print("Re-run with: --apply-untrack --yes", file=sys.stderr)
+            return 2
+
+        untrack_rc = run_step(
+            [sys.executable, "scripts/untrack_managed_notebooks.py", "--apply", "--yes"],
+            step_name="untrack",
+        )
+        if untrack_rc != 0:
+            return untrack_rc
+    else:
+        print("No tracked managed .ipynb files found.")
+
+    sync_rc = run_step([sys.executable, "scripts/sync_notebooks.py"], step_name="sync")
+    if sync_rc != 0:
+        return sync_rc
+
+    check_sync_rc = run_step([sys.executable, "scripts/check_notebook_sync.py"], step_name="check-sync")
+    if check_sync_rc != 0:
+        return check_sync_rc
+
+    check_policy_rc = run_step([sys.executable, "scripts/check_notebook_policy.py"], step_name="check-policy")
+    if check_policy_rc != 0:
+        return check_policy_rc
+
+    print("\\nMigration checks passed.")
+    print("Next: review git status, then commit the staged/untracked changes.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+    migrate_target = scripts_dir / "migrate_existing_notebooks.py"
+    migrate_status = write_text_file(migrate_target, migrate_script, on_existing=on_existing, dry_run=dry_run)
+    report_write(migrate_target, migrate_status)
+
+    print("✓ Script generation completed in scripts/")
+
+
+def create_directories(root: Path, notebook_dir: str, tracked_dir: str, *, dry_run: bool) -> None:
     """Create the notebook directory structure."""
-    (root / notebook_dir / tracked_dir).mkdir(parents=True, exist_ok=True)
-    print(f"✓ Created directory structure: {notebook_dir}/ and {notebook_dir}/{tracked_dir}/")
+    notebook_path = root / notebook_dir
+    tracked_path = root / notebook_dir / tracked_dir
+
+    if dry_run:
+        print(f"• Dry run would ensure directory: {notebook_path}")
+        print(f"• Dry run would ensure directory: {tracked_path}")
+        return
+
+    tracked_path.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Ensured directory structure: {notebook_dir}/ and {notebook_dir}/{tracked_dir}/")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -365,6 +610,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip pixi install and bootstrap (useful for testing)",
     )
+    parser.add_argument(
+        "--on-existing",
+        choices=["skip", "overwrite", "fail"],
+        default="skip",
+        help="How to handle existing generated files (default: skip)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would change without writing files or running pixi commands",
+    )
     args = parser.parse_args(argv)
 
     root = Path.cwd()
@@ -374,19 +630,45 @@ def main(argv: list[str] | None = None) -> int:
     print(f"   Tracked directory: {args.notebook_dir}/{args.tracked_dir}/\n")
 
     # Create configuration files
-    create_directories(root, args.notebook_dir, args.tracked_dir)
-    create_pyproject_toml(root, args.notebook_dir, args.tracked_dir)
-    create_gitignore(root, args.notebook_dir)
-    create_precommit_config(root)
-    create_github_workflow(root)
-    create_scripts(root, args.notebook_dir, args.tracked_dir)
+    create_directories(root, args.notebook_dir, args.tracked_dir, dry_run=args.dry_run)
+
+    try:
+        create_pyproject_toml(
+            root,
+            args.notebook_dir,
+            args.tracked_dir,
+            on_existing=args.on_existing,
+            dry_run=args.dry_run,
+        )
+        create_gitignore(root, args.notebook_dir, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_precommit_config(root, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_github_workflow(root, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_scripts(
+            root,
+            args.notebook_dir,
+            args.tracked_dir,
+            on_existing=args.on_existing,
+            dry_run=args.dry_run,
+        )
+    except FileExistsError as exc:
+        print(f"⚠️  {exc}", file=sys.stderr)
+        print("Use --on-existing overwrite to replace managed files, or --on-existing skip to keep them.", file=sys.stderr)
+        return 1
 
     print("\n✅ Setup complete!\n")
 
     # Install and bootstrap
-    if not args.skip_pixi:
+    if args.dry_run:
+        print("Dry run complete. No files were changed and no commands were executed.")
+    elif not args.skip_pixi:
         print("🔧 Installing Pixi environment...")
-        result = subprocess.run(["pixi", "install"], cwd=root)
+        try:
+            result = subprocess.run(["pixi", "install"], cwd=root)
+        except FileNotFoundError:
+            print("⚠️  Pixi executable was not found on PATH.", file=sys.stderr)
+            print("Install Pixi from https://pixi.sh, then run 'pixi install' and 'pixi run bootstrap'.", file=sys.stderr)
+            return 1
+
         if result.returncode != 0:
             print("⚠️  pixi install failed. Install Pixi from https://pixi.sh and try again.", file=sys.stderr)
             return 1
@@ -402,8 +684,10 @@ def main(argv: list[str] | None = None) -> int:
     print("Next steps:")
     print(f"  1. Create your first notebook in {args.notebook_dir}/<name>.ipynb")
     print(f"  2. Run: pixi run sync")
-    print(f"  3. Commit: git add {args.notebook_dir}/{args.tracked_dir}/")
-    print("  4. For more info, see SETUP_INSTRUCTIONS.md or NOTEBOOK_WORKFLOW.md")
+    print(f"  3. If migrating existing repos: pixi run preview-untrack-managed-notebooks")
+    print(f"  4. Or run full migration: pixi run migrate-existing-notebooks")
+    print(f"  5. Commit: git add {args.notebook_dir}/{args.tracked_dir}/")
+    print("  6. For more info, see SETUP_INSTRUCTIONS.md or NOTEBOOK_WORKFLOW.md")
     print("=" * 60 + "\n")
 
     return 0

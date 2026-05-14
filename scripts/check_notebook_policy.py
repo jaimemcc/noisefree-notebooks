@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
 
     violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
     if violations:
-        print("Notebook policy violation: .ipynb files should stay in notebooks/source/ and not be tracked in git.", file=sys.stderr)
+        print("Notebook policy violation: .ipynb files under notebooks/ should not be tracked in git.", file=sys.stderr)
         for violation in violations:
             print(f"  - {violation}", file=sys.stderr)
         print(

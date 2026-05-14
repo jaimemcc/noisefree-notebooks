@@ -12,7 +12,14 @@ TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
 
 
 def source_notebooks() -> list[Path]:
-    return sorted(path for path in NOTEBOOK_DIR.glob("*.ipynb") if path.is_file())
+    notebooks: list[Path] = []
+    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
+        if not path.is_file():
+            continue
+        if TRACKED_NOTEBOOK_DIR in path.parents:
+            continue
+        notebooks.append(path)
+    return sorted(notebooks)
 
 
 def main() -> int:
