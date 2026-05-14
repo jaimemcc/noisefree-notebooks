@@ -5,3 +5,6 @@ notebooks/**/*.ipynb
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+*.pyc
+__pycache__/
