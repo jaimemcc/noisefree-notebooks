@@ -531,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\\nTotal tracked managed notebooks: {{len(tracked)}}")
 
     if not args.apply:
-        print("\nPreview mode only. Re-run with --apply to untrack these files.")
+        print("\\nPreview mode only. Re-run with --apply to untrack these files.")
         return 0
 
     if not args.yes:
@@ -545,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Failed to untrack one or more files.", file=sys.stderr)
         return completed.returncode
 
-    print("\nUntracked managed .ipynb files from git index.")
+    print("\\nUntracked managed .ipynb files from git index.")
     print("Run 'pixi run sync' and commit the updated tracked .py files.")
     return 0
 
