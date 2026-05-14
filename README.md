@@ -23,6 +23,22 @@ Workflow implementation files are isolated under `tooling/notebook_workflow/` so
 
 Planned future work is tracked in [TODO.md](TODO.md), including the workflow/package update strategy across repositories.
 
+## Development & Testing
+
+To catch syntax errors and runtime issues early before deployment, run the test suite:
+
+```powershell
+python test_setup_script.py
+```
+
+This validates:
+- Python syntax in setup scripts
+- Argument parsing and help output
+- Dry-run execution for runtime errors
+- Module imports for undefined variables
+
+Run this before committing changes to `setup_notebook_workflow.py`, `update_notebook_workflow.py`, or script templates.
+
 ## Update Procedure
 
 To update managed workflow files in an existing repository without re-entering your original setup arguments:
