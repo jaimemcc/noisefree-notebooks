@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tempfile
 import sys
 from pathlib import Path
 
@@ -8,30 +7,37 @@ import jupytext
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
+SOURCE_NOTEBOOK_DIR = ROOT / "notebooks" / "source"
+TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
 
 
-def tracked_text_notebooks() -> list[Path]:
-    return sorted(path for path in TEXT_NOTEBOOK_DIR.rglob("*.py") if path.is_file())
+def source_notebooks() -> list[Path]:
+    return sorted(path for path in SOURCE_NOTEBOOK_DIR.rglob("*.ipynb") if path.is_file())
 
 
 def main() -> int:
-    notebooks = tracked_text_notebooks()
+    notebooks = source_notebooks()
     if not notebooks:
-        print("Notebook sync check passed: no tracked text notebooks found.")
+        print("Notebook sync check passed: no source notebooks found.")
         return 0
 
-    for notebook in notebooks:
-        original_text = notebook.read_text(encoding="utf-8")
-        notebook_object = jupytext.read(notebook, fmt="py:percent")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_ipynb = Path(temp_dir) / f"{notebook.stem}.ipynb"
-            jupytext.write(notebook_object, temp_ipynb, fmt="ipynb")
-            roundtrip_text = jupytext.writes(jupytext.read(temp_ipynb), fmt="py:percent")
+    for source_notebook in notebooks:
+        relative_path = source_notebook.relative_to(SOURCE_NOTEBOOK_DIR).with_suffix(".py")
+        target_notebook = TRACKED_NOTEBOOK_DIR / relative_path
 
-        if roundtrip_text != original_text:
+        if not target_notebook.exists():
             print(
-                f"Notebook sync check failed for {notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync-notebooks",
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync-notebooks",
+                file=sys.stderr,
+            )
+            return 1
+
+        regenerated_text = jupytext.writes(jupytext.read(source_notebook), fmt="py:percent")
+        current_text = target_notebook.read_text(encoding="utf-8")
+
+        if regenerated_text != current_text:
+            print(
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync-notebooks",
                 file=sys.stderr,
             )
             return 1

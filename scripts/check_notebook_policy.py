@@ -32,11 +32,11 @@ def main(argv: list[str] | None = None) -> int:
 
     violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
     if violations:
-        print("Notebook policy violation: generated .ipynb files are not tracked in managed notebook paths.", file=sys.stderr)
+        print("Notebook policy violation: .ipynb files should stay in notebooks/source/ and not be tracked in git.", file=sys.stderr)
         for violation in violations:
             print(f"  - {violation}", file=sys.stderr)
         print(
-            "Fix: regenerate the paired text notebook, or remove the staged/generated .ipynb file from notebooks/.",
+            "Fix: keep the source notebook local, then run pixi run sync-notebooks to refresh the tracked .py copy.",
             file=sys.stderr,
         )
         return 1

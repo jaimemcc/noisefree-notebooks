@@ -22,7 +22,7 @@ def main() -> int:
     ensure_python_package("pre_commit")
 
     print("Notebook workflow bootstrap is ready.")
-    print("Next: run 'pre-commit install' once, then use jupytext to sync notebook pairs.")
+    print("Next: run 'pre-commit install' once, then use 'pixi run sync-notebooks' after editing notebooks/source/*.ipynb.")
     return 0
 
 
