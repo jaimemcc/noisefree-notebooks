@@ -4,7 +4,7 @@ formats = "py:percent,ipynb"
 [tool.pixi.workspace]
 name = "nbtest"
 channels = ["conda-forge"]
-platforms = ["win-64"]
+platforms = ["win-64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
 jupytext = ">=1.16"
