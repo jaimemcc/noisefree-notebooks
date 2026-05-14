@@ -1147,6 +1147,7 @@ def create_directories(root: Path, source_dirs: list[str], tracked_subdir: str, 
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = argv if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(
         description="Set up Pixi + Jupytext notebook workflow",
         formatter_class=argparse.RawDescriptionHelpFormatter,
