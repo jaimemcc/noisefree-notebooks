@@ -81,6 +81,45 @@ def test_setup_script_dry_run():
         return True
 
 
+def test_generated_pyproject_platforms():
+    """Ensure generated pyproject includes both Windows and Linux platforms for CI lock compatibility."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root = Path(tmpdir)
+
+        setup_script = Path("setup_notebook_workflow.py")
+        if setup_script.exists():
+            shutil.copy(setup_script, test_root / "setup_notebook_workflow.py")
+
+        result = subprocess.run(
+            [sys.executable, "setup_notebook_workflow.py", "--skip-pixi", "--on-existing", "overwrite"],
+            cwd=test_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+
+        if result.returncode != 0:
+            print("❌ setup_notebook_workflow.py failed while generating pyproject:")
+            print(result.stderr)
+            return False
+
+        pyproject_path = test_root / "pyproject.toml"
+        if not pyproject_path.exists():
+            print("❌ setup_notebook_workflow.py did not generate pyproject.toml")
+            return False
+
+        content = pyproject_path.read_text(encoding="utf-8")
+        expected = 'platforms = ["win-64", "linux-64"]'
+        if expected not in content:
+            print("❌ Generated pyproject.toml is missing required multi-platform Pixi config")
+            print(f"Expected line: {expected}")
+            return False
+
+        print("✓ generated pyproject.toml includes win-64 and linux-64 platforms")
+        return True
+
+
 def test_generated_script_syntax():
     """Test that generated scripts have valid Python syntax."""
     scripts_to_check = [
@@ -153,6 +192,7 @@ def main():
         ("Import update_notebook_workflow", test_import_update_module),
         ("Help output", test_setup_script_help),
         ("Dry-run execution", test_setup_script_dry_run),
+        ("Generated pyproject platforms", test_generated_pyproject_platforms),
     ]
     
     results = []

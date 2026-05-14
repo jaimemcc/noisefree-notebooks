@@ -63,6 +63,12 @@ To update managed workflow files in an existing repository without re-entering y
 python update_notebook_workflow.py --skip-pixi
 ```
 
+If the repository was created with an older setup script, pull the latest setup script first so template fixes are applied:
+
+```powershell
+python update_notebook_workflow.py --pull-setup --skip-pixi
+```
+
 Or using Pixi task:
 
 ```powershell
@@ -81,6 +87,14 @@ python update_notebook_workflow.py --pull-setup --repo jaimemcc/noisefree-notebo
 ```
 
 Tip: prefer a pinned release tag (`--ref vX.Y.Z`) over branch names for reproducible updates.
+
+Important for CI (`pixi install --locked`): if `pyproject.toml` changed during setup/update or after adding packages, regenerate and commit `pixi.lock`.
+
+```powershell
+pixi lock
+git add pyproject.toml pixi.lock
+git commit -m "Refresh Pixi lockfile"
+```
 
 ## Setup options
 
