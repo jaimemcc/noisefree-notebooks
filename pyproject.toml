@@ -16,6 +16,7 @@ check-notebook-policy = "python scripts/check_notebook_policy.py"
 check-notebook-sync = "python scripts/check_notebook_sync.py"
 check-notebooks = { depends-on = ["check-notebook-policy", "check-notebook-sync"] }
 sync-notebooks = "python scripts/sync_notebooks.py"
+regenerate-notebooks = "python scripts/regenerate_notebooks.py"
 
 [tool.pixi.dependencies]
 matplotlib = ">=3.10.9,<4"
