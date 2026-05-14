@@ -13,6 +13,10 @@ from notebook_workflow_config import tracked_path_for_source
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def read_source_notebook(source_notebook: Path):
+    return jupytext.reads(source_notebook.read_text(encoding="utf-8-sig"), fmt="ipynb")
+
+
 def main() -> int:
     try:
         managed_roots = load_managed_roots(ROOT)
@@ -35,7 +39,7 @@ def main() -> int:
             )
             return 1
 
-        regenerated_text = jupytext.writes(jupytext.read(source_notebook), fmt="py:percent")
+        regenerated_text = jupytext.writes(read_source_notebook(source_notebook), fmt="py:percent")
         current_text = target_notebook.read_text(encoding="utf-8")
 
         if regenerated_text != current_text:

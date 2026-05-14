@@ -10,6 +10,7 @@ By default, setup is safe for established repositories:
 - Existing managed files are preserved (`--on-existing skip`).
 - Managed files can be previewed without changes (`--dry-run`).
 - If the repository already uses `pixi.toml`, setup merges the notebook workflow tasks and dependencies into that manifest instead of creating a second Pixi config in `pyproject.toml`.
+- If managed notebooks already exist, setup runs an initial `pixi run sync` after `pixi install` so the first commit starts from an in-sync text copy.
 - The script runs `pixi install` and then `pixi run bootstrap` unless `--skip-pixi` is used.
 
 ## Getting Started
@@ -110,6 +111,8 @@ python setup_notebook_workflow.py
 ```powershell
 python setup_notebook_workflow.py --on-existing skip
 ```
+
+If you also pass `--skip-pixi` in an existing repo that already contains notebooks, run `pixi run sync` before your first commit.
 
 ### Option C: preview setup changes first
 

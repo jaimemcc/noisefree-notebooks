@@ -271,6 +271,27 @@ def bootstrap_pre_commit_hooks(root: Path) -> int:
     return result.returncode
 
 
+def count_existing_source_notebooks(root: Path, source_dirs: list[str]) -> int:
+    """Count source notebooks already present under managed roots."""
+    total = 0
+    for source_dir in source_dirs:
+        total += sum(1 for _ in (root / source_dir).rglob("*.ipynb"))
+    return total
+
+
+def run_initial_notebook_sync(root: Path, existing_notebook_count: int) -> int:
+    """Populate tracked text notebooks for repos that already contain source notebooks."""
+    if existing_notebook_count == 0:
+        return 0
+
+    print(f"\n📝 Syncing {existing_notebook_count} existing notebook(s) into tracked text files...")
+    result = subprocess.run(["pixi", "run", "sync-notebooks"], cwd=root)
+    if result.returncode != 0:
+        print("⚠️  initial notebook sync failed. Run 'pixi run sync' manually.", file=sys.stderr)
+        return result.returncode
+    return 0
+
+
 def normalize_relative_repo_path(path_text: str, *, field_name: str) -> str:
     candidate = Path(path_text)
     if candidate.is_absolute():
@@ -1002,6 +1023,10 @@ from notebook_workflow_config import tracked_path_for_source
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def read_source_notebook(source_notebook: Path):
+    return jupytext.reads(source_notebook.read_text(encoding="utf-8-sig"), fmt="ipynb")
+
+
 def main() -> int:
     try:
         managed_roots = load_managed_roots(ROOT)
@@ -1018,7 +1043,7 @@ def main() -> int:
         target_notebook = tracked_path_for_source(source_notebook, managed_root)
         target_notebook.parent.mkdir(parents=True, exist_ok=True)
 
-        notebook_object = jupytext.read(source_notebook)
+        notebook_object = read_source_notebook(source_notebook)
         jupytext.write(notebook_object, target_notebook, fmt="py:percent")
 
     print("Notebook sync complete.")
@@ -1044,6 +1069,10 @@ from notebook_workflow_config import tracked_path_for_source
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def read_source_notebook(source_notebook: Path):
+    return jupytext.reads(source_notebook.read_text(encoding="utf-8-sig"), fmt="ipynb")
+
+
 def main() -> int:
     try:
         managed_roots = load_managed_roots(ROOT)
@@ -1066,7 +1095,7 @@ def main() -> int:
             )
             return 1
 
-        regenerated_text = jupytext.writes(jupytext.read(source_notebook), fmt="py:percent")
+        regenerated_text = jupytext.writes(read_source_notebook(source_notebook), fmt="py:percent")
         current_text = target_notebook.read_text(encoding="utf-8")
 
         if regenerated_text != current_text:
@@ -1510,6 +1539,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"   Managed roots source: {source_resolution}")
     print(f"   Pixi Python: {python_spec} (from {python_spec_source})\n")
 
+    existing_notebook_count = count_existing_source_notebooks(root, source_dirs)
+
     # Create configuration files
     create_directories(root, source_dirs, tracked_subdir, dry_run=args.dry_run)
 
@@ -1557,8 +1588,17 @@ def main(argv: list[str] | None = None) -> int:
             print("⚠️  pixi install failed. Install Pixi from https://pixi.sh and try again.", file=sys.stderr)
             return 1
 
+        if run_initial_notebook_sync(root, existing_notebook_count) != 0:
+            return 1
+
         if bootstrap_pre_commit_hooks(root) != 0:
             return 1
+
+    elif existing_notebook_count > 0:
+        print(
+            f"Note: {existing_notebook_count} existing notebook(s) were detected. Run 'pixi run sync' before your first commit.",
+            file=sys.stderr,
+        )
 
     print("\n" + "=" * 60)
     print("🎉 Notebook workflow is ready!\n")

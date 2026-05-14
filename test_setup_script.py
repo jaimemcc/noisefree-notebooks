@@ -190,6 +190,40 @@ python = "3.12.*"
         return True
 
 
+def test_existing_notebooks_are_reported_for_initial_sync():
+    """Ensure setup detects existing notebooks and tells the user to sync before first commit when Pixi is skipped."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root = Path(tmpdir)
+        notebooks_dir = test_root / "notebooks"
+        notebooks_dir.mkdir(parents=True)
+        (notebooks_dir / "example.ipynb").write_text('{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}\n', encoding="utf-8")
+
+        setup_script = Path("setup_notebook_workflow.py")
+        if setup_script.exists():
+            shutil.copy(setup_script, test_root / "setup_notebook_workflow.py")
+
+        result = subprocess.run(
+            [sys.executable, "setup_notebook_workflow.py", "--skip-pixi", "--on-existing", "overwrite"],
+            cwd=test_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+
+        if result.returncode != 0:
+            print("❌ setup_notebook_workflow.py failed while checking existing notebook sync guidance:")
+            print(result.stderr)
+            return False
+
+        if "Run 'pixi run sync' before your first commit." not in result.stderr:
+            print("❌ setup_notebook_workflow.py did not warn about syncing existing notebooks before first commit")
+            return False
+
+        print("✓ existing notebooks are reported for initial sync guidance")
+        return True
+
+
 def test_generated_script_syntax():
     """Test that generated scripts have valid Python syntax."""
     scripts_to_check = [
@@ -264,6 +298,7 @@ def main():
         ("Dry-run execution", test_setup_script_dry_run),
         ("Generated pyproject platforms", test_generated_pyproject_platforms),
         ("Existing pixi.toml merge", test_existing_pixi_toml_gets_workflow_entries),
+        ("Existing notebook sync guidance", test_existing_notebooks_are_reported_for_initial_sync),
     ]
     
     results = []
