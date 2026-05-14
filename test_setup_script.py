@@ -120,6 +120,76 @@ def test_generated_pyproject_platforms():
         return True
 
 
+def test_existing_pixi_toml_gets_workflow_entries():
+    """Ensure setup merges workflow tasks/deps into an existing pixi.toml repo."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root = Path(tmpdir)
+
+        (test_root / "pixi.toml").write_text(
+            """
+[workspace]
+name = "existing-project"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = "3.12.*"
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        setup_script = Path("setup_notebook_workflow.py")
+        if setup_script.exists():
+            shutil.copy(setup_script, test_root / "setup_notebook_workflow.py")
+
+        result = subprocess.run(
+            [sys.executable, "setup_notebook_workflow.py", "--skip-pixi", "--on-existing", "skip"],
+            cwd=test_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+
+        if result.returncode != 0:
+            print("❌ setup_notebook_workflow.py failed for existing pixi.toml repo:")
+            print(result.stderr)
+            return False
+
+        pixi_toml_path = test_root / "pixi.toml"
+        pyproject_path = test_root / "pyproject.toml"
+        if not pixi_toml_path.exists():
+            print("❌ Existing pixi.toml was not preserved")
+            return False
+        if not pyproject_path.exists():
+            print("❌ setup_notebook_workflow.py did not create pyproject.toml for jupytext config")
+            return False
+
+        pixi_content = pixi_toml_path.read_text(encoding="utf-8")
+        pyproject_content = pyproject_path.read_text(encoding="utf-8")
+
+        expected_entries = [
+            "[tasks]",
+            'bootstrap = "pre-commit install"',
+            "[pypi-dependencies]",
+            'jupytext = ">=1.16"',
+            'pre-commit = ">=3.7"',
+            'python = "3.12.*"',
+        ]
+        for expected_entry in expected_entries:
+            if expected_entry not in pixi_content:
+                print(f"❌ Existing pixi.toml is missing expected workflow entry: {expected_entry}")
+                return False
+
+        if "[tool.jupytext]" not in pyproject_content:
+            print("❌ pyproject.toml is missing the jupytext config section")
+            return False
+
+        print("✓ existing pixi.toml repos get notebook workflow tasks and dependencies")
+        return True
+
+
 def test_generated_script_syntax():
     """Test that generated scripts have valid Python syntax."""
     scripts_to_check = [
@@ -193,6 +263,7 @@ def main():
         ("Help output", test_setup_script_help),
         ("Dry-run execution", test_setup_script_dry_run),
         ("Generated pyproject platforms", test_generated_pyproject_platforms),
+        ("Existing pixi.toml merge", test_existing_pixi_toml_gets_workflow_entries),
     ]
     
     results = []

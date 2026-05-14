@@ -26,6 +26,58 @@ WORKFLOW_VERSION = "0.1.0"
 DEFAULT_WORKFLOW_SOURCE_REPO = "jaimemcc/noisefree-notebooks"
 DEFAULT_WORKFLOW_SOURCE_REF = "main"
 
+WORKFLOW_PYPI_DEPENDENCIES = {
+    "jupytext": '">=1.16"',
+    "pre-commit": '">=3.7"',
+}
+
+WORKFLOW_TASKS = {
+    "bootstrap": '"pre-commit install"',
+    "check-notebook-policy": '"python tooling/notebook_workflow/check_notebook_policy.py"',
+    "check-notebook-sync": '"python tooling/notebook_workflow/check_notebook_sync.py"',
+    "check-notebooks": '{ depends-on = ["check-notebook-policy", "check-notebook-sync"] }',
+    "sync-notebooks": '"python tooling/notebook_workflow/sync_notebooks.py"',
+    "regenerate-notebooks": '"python tooling/notebook_workflow/regenerate_notebooks.py"',
+    "untrack-managed-notebooks": '"python tooling/notebook_workflow/untrack_managed_notebooks.py --apply --yes"',
+    "preview-untrack-managed-notebooks": '"python tooling/notebook_workflow/untrack_managed_notebooks.py"',
+    "migrate-existing-notebooks-preview": '"python tooling/notebook_workflow/migrate_existing_notebooks.py"',
+    "migrate-existing-notebooks": '"python tooling/notebook_workflow/migrate_existing_notebooks.py --apply-untrack --yes"',
+    "update-notebook-workflow": '"python update_notebook_workflow.py --pull-setup --skip-pixi"',
+    "sync": '{ depends-on = ["sync-notebooks"] }',
+    "regen": '{ depends-on = ["regenerate-notebooks"] }',
+    "check": '{ depends-on = ["check-notebooks"] }',
+    "update": '{ depends-on = ["update-notebook-workflow"] }',
+}
+
+JUPYTEXT_SECTION = [("tool.jupytext", {"formats": '"ipynb,py:percent"'})]
+
+PYPROJECT_WORKFLOW_SECTIONS = [
+    ("tool.jupytext", {"formats": '"ipynb,py:percent"'}),
+    (
+        "tool.pixi.workspace",
+        {
+            "name": '"notebook-project"',
+            "channels": '["conda-forge"]',
+            "platforms": '["win-64", "linux-64"]',
+        },
+    ),
+    ("tool.pixi.pypi-dependencies", WORKFLOW_PYPI_DEPENDENCIES),
+    ("tool.pixi.tasks", WORKFLOW_TASKS),
+]
+
+PIXI_TOML_DEFAULT_SECTIONS = [
+    (
+        "workspace",
+        {
+            "name": '"notebook-project"',
+            "channels": '["conda-forge"]',
+            "platforms": '["win-64", "linux-64"]',
+        },
+    ),
+    ("pypi-dependencies", WORKFLOW_PYPI_DEPENDENCIES),
+    ("tasks", WORKFLOW_TASKS),
+]
+
 
 def write_text_file(path: Path, content: str, *, on_existing: str, dry_run: bool) -> str:
     """Write file content with configurable behavior for existing files."""
@@ -56,16 +108,156 @@ def report_write(path: Path, status: str) -> None:
     print(f"{labels.get(status, '•')} {path}")
 
 
+def detect_pixi_manifest_path(root: Path) -> Path:
+    """Return the Pixi manifest file that this repository should use."""
+    pixi_toml = root / "pixi.toml"
+    if pixi_toml.exists():
+        return pixi_toml
+    return root / "pyproject.toml"
+
+
+def _find_section_bounds(lines: list[str], section_name: str) -> tuple[int, int] | None:
+    header = f"[{section_name}]"
+    start_index: int | None = None
+
+    for index, raw_line in enumerate(lines):
+        if raw_line.strip().lstrip("\ufeff") == header:
+            start_index = index
+            break
+
+    if start_index is None:
+        return None
+
+    end_index = len(lines)
+    for index in range(start_index + 1, len(lines)):
+        stripped = lines[index].strip().lstrip("\ufeff")
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end_index = index
+            break
+
+    return start_index, end_index
+
+
+def _merge_toml_sections(existing_text: str, sections: list[tuple[str, dict[str, str]]], *, on_existing: str) -> tuple[str, bool]:
+    lines = existing_text.splitlines()
+    changed = False
+
+    for section_name, entries in sections:
+        section_bounds = _find_section_bounds(lines, section_name)
+        if section_bounds is None:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(f"[{section_name}]")
+            for key, value in entries.items():
+                lines.append(f"{key} = {value}")
+            changed = True
+            continue
+
+        section_start, section_end = section_bounds
+        for key, value in entries.items():
+            desired_line = f"{key} = {value}"
+            existing_index: int | None = None
+            for index in range(section_start + 1, section_end):
+                if re.match(rf"\s*{re.escape(key)}\s*=", lines[index]):
+                    existing_index = index
+                    break
+
+            if existing_index is None:
+                lines.insert(section_end, desired_line)
+                section_end += 1
+                changed = True
+                continue
+
+            if lines[existing_index].strip() == desired_line:
+                continue
+
+            if on_existing == "skip":
+                continue
+            if on_existing == "fail":
+                raise FileExistsError(f"Refusing to overwrite existing key '{key}' in [{section_name}]")
+
+            lines[existing_index] = desired_line
+            changed = True
+
+    return "\n".join(lines) + "\n", changed
+
+
+def write_toml_sections(
+    path: Path,
+    sections: list[tuple[str, dict[str, str]]],
+    *,
+    on_existing: str,
+    dry_run: bool,
+) -> str:
+    """Create or merge TOML sections into a manifest-like file."""
+    existed_before = path.exists()
+
+    if not existed_before:
+        if dry_run:
+            return "would-create"
+
+        content_lines: list[str] = []
+        for index, (section_name, entries) in enumerate(sections):
+            if index:
+                content_lines.append("")
+            content_lines.append(f"[{section_name}]")
+            for key, value in entries.items():
+                content_lines.append(f"{key} = {value}")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(content_lines) + "\n", encoding="utf-8")
+        return "created"
+
+    existing_text = path.read_text(encoding="utf-8").lstrip("\ufeff")
+    updated_text, changed = _merge_toml_sections(existing_text, sections, on_existing=on_existing)
+    if not changed:
+        return "skipped"
+
+    if dry_run:
+        return "would-overwrite"
+
+    path.write_text(updated_text, encoding="utf-8")
+    return "overwritten"
+
+
+def active_manifest_defines_task(root: Path, task_name: str) -> bool:
+    """Return True when the active Pixi manifest already defines the given task."""
+    manifest_path = detect_pixi_manifest_path(root)
+    if not manifest_path.exists():
+        return False
+
+    section_name = "[tasks]"
+    if manifest_path.name == "pyproject.toml":
+        section_name = "[tool.pixi.tasks]"
+
+    in_tasks_section = False
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_tasks_section = line == section_name
+            continue
+        if in_tasks_section and re.match(rf"{re.escape(task_name)}\s*=", line):
+            return True
+
+    return False
+
+
 def bootstrap_pre_commit_hooks(root: Path) -> int:
     """Install pre-commit hooks, falling back to a direct executable call."""
     print("\n🚀 Bootstrapping pre-commit hooks...")
 
-    result = subprocess.run(["pixi", "run", "bootstrap"], cwd=root)
-    if result.returncode == 0:
-        return 0
+    if active_manifest_defines_task(root, "bootstrap"):
+        result = subprocess.run(["pixi", "run", "bootstrap"], cwd=root)
+        if result.returncode == 0:
+            return 0
+
+        print("⚠️  bootstrap failed. Check the Pixi/pre-commit output above.", file=sys.stderr)
+        return result.returncode
 
     print(
-        "   bootstrap task was not available; trying pre-commit directly through Pixi...",
+        "   bootstrap task is not defined in the active Pixi manifest; trying pre-commit directly through Pixi...",
         file=sys.stderr,
     )
     result = subprocess.run(["pixi", "run", "--executable", "pre-commit", "install"], cwd=root)
@@ -173,19 +365,23 @@ def load_existing_managed_roots(root: Path) -> tuple[list[str], str] | None:
 
 
 def infer_existing_pixi_python(root: Path) -> str | None:
-    """Read existing [tool.pixi.dependencies].python pin from pyproject.toml if present."""
-    pyproject_path = root / "pyproject.toml"
-    if not pyproject_path.exists():
+    """Read the current Pixi python pin from the active manifest if present."""
+    manifest_path = detect_pixi_manifest_path(root)
+    if not manifest_path.exists():
         return None
 
+    dependencies_section = "[dependencies]"
+    if manifest_path.name == "pyproject.toml":
+        dependencies_section = "[tool.pixi.dependencies]"
+
     in_pixi_dependencies = False
-    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
         if not line or line.startswith("#"):
             continue
 
         if line.startswith("[") and line.endswith("]"):
-            in_pixi_dependencies = line == "[tool.pixi.dependencies]"
+            in_pixi_dependencies = line == dependencies_section
             continue
 
         if in_pixi_dependencies and line.startswith("python"):
@@ -230,12 +426,12 @@ def resolve_python_spec(root: Path, requested_python_spec: str | None) -> tuple[
 
     existing_python_spec = infer_existing_pixi_python(root)
     if existing_python_spec:
-        return validate_python_spec(existing_python_spec), "existing pyproject.toml"
+        return validate_python_spec(existing_python_spec), f"existing {detect_pixi_manifest_path(root).name}"
 
     return validate_python_spec(DEFAULT_PYTHON_SPEC), "default"
 
 
-def create_pyproject_toml(
+def create_pixi_manifests(
     root: Path,
     notebook_dir: str,
     tracked_dir: str,
@@ -244,44 +440,39 @@ def create_pyproject_toml(
     on_existing: str,
     dry_run: bool,
 ) -> None:
-    """Generate pyproject.toml with Pixi and Jupytext configuration."""
-    content = f'''\
-[tool.jupytext]
-formats = "ipynb,py:percent"
+    """Generate or merge Pixi/Jupytext manifests using the repo's active Pixi file."""
+    manifest_path = detect_pixi_manifest_path(root)
 
-[tool.pixi.workspace]
-name = "notebook-project"
-channels = ["conda-forge"]
-platforms = ["win-64", "linux-64"]
+    if manifest_path.name == "pixi.toml":
+        pyproject_path = root / "pyproject.toml"
+        pyproject_status = write_toml_sections(
+            pyproject_path,
+            JUPYTEXT_SECTION,
+            on_existing=on_existing,
+            dry_run=dry_run,
+        )
+        report_write(pyproject_path, pyproject_status)
 
-[tool.pixi.pypi-dependencies]
-jupytext = ">=1.16"
-pre-commit = ">=3.7"
+        manifest_sections = list(PIXI_TOML_DEFAULT_SECTIONS)
+        manifest_sections.append(("dependencies", {"python": f'"{python_spec}"'}))
+        manifest_status = write_toml_sections(
+            manifest_path,
+            manifest_sections,
+            on_existing=on_existing,
+            dry_run=dry_run,
+        )
+        report_write(manifest_path, manifest_status)
+        return
 
-[tool.pixi.tasks]
-bootstrap = "pre-commit install"
-check-notebook-policy = "python tooling/notebook_workflow/check_notebook_policy.py"
-check-notebook-sync = "python tooling/notebook_workflow/check_notebook_sync.py"
-check-notebooks = {{ depends-on = ["check-notebook-policy", "check-notebook-sync"] }}
-sync-notebooks = "python tooling/notebook_workflow/sync_notebooks.py"
-regenerate-notebooks = "python tooling/notebook_workflow/regenerate_notebooks.py"
-untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py --apply --yes"
-preview-untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py"
-migrate-existing-notebooks-preview = "python tooling/notebook_workflow/migrate_existing_notebooks.py"
-migrate-existing-notebooks = "python tooling/notebook_workflow/migrate_existing_notebooks.py --apply-untrack --yes"
-update-notebook-workflow = "python update_notebook_workflow.py --pull-setup --skip-pixi"
-# Aliases for convenience
-sync = {{ depends-on = ["sync-notebooks"] }}
-regen = {{ depends-on = ["regenerate-notebooks"] }}
-check = {{ depends-on = ["check-notebooks"] }}
-update = {{ depends-on = ["update-notebook-workflow"] }}
-
-[tool.pixi.dependencies]
-python = "{python_spec}"
-'''
-    target = root / "pyproject.toml"
-    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
-    report_write(target, status)
+    manifest_sections = list(PYPROJECT_WORKFLOW_SECTIONS)
+    manifest_sections.append(("tool.pixi.dependencies", {"python": f'"{python_spec}"'}))
+    manifest_status = write_toml_sections(
+        manifest_path,
+        manifest_sections,
+        on_existing=on_existing,
+        dry_run=dry_run,
+    )
+    report_write(manifest_path, manifest_status)
 
 
 def create_gitignore(root: Path, source_dirs: list[str], *, on_existing: str, dry_run: bool) -> None:
@@ -426,17 +617,22 @@ def _read_workflow_config(root: Path) -> tuple[list[str], str, str, str]:
 
 
 def _read_python_pin(root: Path) -> str | None:
-    pyproject_path = root / "pyproject.toml"
-    if not pyproject_path.exists():
+    manifest_path = root / "pixi.toml"
+    dependencies_section = "[dependencies]"
+    if not manifest_path.exists():
+        manifest_path = root / "pyproject.toml"
+        dependencies_section = "[tool.pixi.dependencies]"
+
+    if not manifest_path.exists():
         return None
 
     in_section = False
-    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
         if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
-            in_section = line == "[tool.pixi.dependencies]"
+            in_section = line == dependencies_section
             continue
         if in_section and line.startswith("python"):
             match = re.match(r'python\\s*=\\s*["\\']([^"\\']+)["\\']', line)
@@ -1318,7 +1514,7 @@ def main(argv: list[str] | None = None) -> int:
     create_directories(root, source_dirs, tracked_subdir, dry_run=args.dry_run)
 
     try:
-        create_pyproject_toml(
+        create_pixi_manifests(
             root,
             source_dirs[0],
             tracked_subdir,
@@ -1366,9 +1562,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n" + "=" * 60)
     print("🎉 Notebook workflow is ready!\n")
+    manifest_paths = [path.name for path in [root / "pixi.toml", root / "pyproject.toml"] if path.exists()]
+    manifest_args = " ".join(manifest_paths)
     print("Next steps:")
     print(f"  0. Commit generated workflow files to establish clean baseline:")
-    print(f"     git add pyproject.toml tooling/ notebook_workflow_config.json")
+    print(f"     git add {manifest_args} tooling/ notebook_workflow_config.json")
     print(f"     git commit -m 'Set up notebook workflow with Pixi + Jupytext'")
     print(f"  1. Create your first notebook in {source_dirs[0]}/<name>.ipynb")
     print(f"  2. Run: pixi run sync")

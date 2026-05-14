@@ -9,7 +9,8 @@ Use [setup_notebook_workflow.py](setup_notebook_workflow.py) to install the work
 By default, setup is safe for established repositories:
 - Existing managed files are preserved (`--on-existing skip`).
 - Managed files can be previewed without changes (`--dry-run`).
-- The script runs `pixi install` and then tries `pixi run bootstrap`, falling back to `pixi run --executable pre-commit install` when the bootstrap task is not available.
+- If the repository already uses `pixi.toml`, setup merges the notebook workflow tasks and dependencies into that manifest instead of creating a second Pixi config in `pyproject.toml`.
+- The script runs `pixi install` and then `pixi run bootstrap` unless `--skip-pixi` is used.
 
 ## Getting Started
 
@@ -20,7 +21,7 @@ By default, setup is safe for established repositories:
 
 2. **Commit the generated workflow files** to establish a clean baseline before adding notebooks:
    ```powershell
-   git add pyproject.toml tooling/ notebook_workflow_config.json
+	git add pyproject.toml pixi.toml tooling/ notebook_workflow_config.json
    git commit -m "Set up notebook workflow with Pixi + Jupytext"
    ```
    This separates infrastructure changes from your notebook content changes, making git history clearer and updates easier.
@@ -92,7 +93,7 @@ Important for CI (`pixi install --locked`): if `pyproject.toml` changed during s
 
 ```powershell
 pixi lock
-git add pyproject.toml pixi.lock
+ git add pyproject.toml pixi.toml pixi.lock
 git commit -m "Refresh Pixi lockfile"
 ```
 

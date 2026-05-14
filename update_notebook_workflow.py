@@ -58,17 +58,22 @@ def _read_workflow_config(root: Path) -> tuple[list[str], str, str, str]:
 
 
 def _read_python_pin(root: Path) -> str | None:
-    pyproject_path = root / "pyproject.toml"
-    if not pyproject_path.exists():
+    manifest_path = root / "pixi.toml"
+    dependencies_section = "[dependencies]"
+    if not manifest_path.exists():
+        manifest_path = root / "pyproject.toml"
+        dependencies_section = "[tool.pixi.dependencies]"
+
+    if not manifest_path.exists():
         return None
 
     in_section = False
-    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
         if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
-            in_section = line == "[tool.pixi.dependencies]"
+            in_section = line == dependencies_section
             continue
         if in_section and line.startswith("python"):
             match = re.match(r'python\s*=\s*["\']([^"\']+)["\']', line)
