@@ -672,24 +672,29 @@ def main(argv: list[str] | None = None) -> int:
             Examples:
               python setup_notebook_workflow.py
               python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+              python setup_notebook_workflow.py -n analysis -t .tracked -p 3.12.* -o overwrite
         """),
     )
     parser.add_argument(
+        "-n",
         "--notebook-dir",
         default="notebooks",
         help="Directory for source .ipynb files (default: notebooks)",
     )
     parser.add_argument(
+        "-t",
         "--tracked-dir",
         default="text",
         help="Subdirectory within notebook-dir for tracked .py files (default: text)",
     )
     parser.add_argument(
+        "-s",
         "--skip-pixi",
         action="store_true",
         help="Skip pixi install and bootstrap (useful for testing)",
     )
     parser.add_argument(
+        "-p",
         "--python-version",
         help=(
             "Python version/spec for [tool.pixi.dependencies].python "
@@ -697,12 +702,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "-o",
         "--on-existing",
         choices=["skip", "overwrite", "fail"],
         default="skip",
         help="How to handle existing generated files (default: skip)",
     )
     parser.add_argument(
+        "-d",
         "--dry-run",
         action="store_true",
         help="Show what would change without writing files or running pixi commands",

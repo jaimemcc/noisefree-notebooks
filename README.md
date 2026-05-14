@@ -55,6 +55,14 @@ python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir text
 python setup_notebook_workflow.py --python-version 3.12.*
 ```
 
+Short aliases are also available:
+- `-n` for `--notebook-dir`
+- `-t` for `--tracked-dir`
+- `-p` for `--python-version`
+- `-s` for `--skip-pixi`
+- `-o` for `--on-existing`
+- `-d` for `--dry-run`
+
 Behavior when `--python-version` is omitted:
 - If `pyproject.toml` already has `[tool.pixi.dependencies] python = ...`, that pin is reused.
 - Otherwise the setup default is `3.11.*`.
