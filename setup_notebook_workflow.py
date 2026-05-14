@@ -431,8 +431,13 @@ def _pull_setup_script(root: Path, *, repo: str, ref: str) -> None:
     except URLError as exc:
         raise RuntimeError(f"Failed to download setup script from {{url}}: {{exc}}") from exc
 
+    previous_content = setup_path.read_text(encoding="utf-8") if setup_path.exists() else None
     setup_path.write_text(content, encoding="utf-8")
-    print(f"Updated setup script from {{url}}")
+
+    if previous_content == content:
+        print(f"Pull setup: no changes (already up to date) from {{url}}")
+    else:
+        print(f"Pull setup: updated setup_notebook_workflow.py from {{url}}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -458,6 +463,12 @@ def main(argv: list[str] | None = None) -> int:
 
     repo = args.repo or default_repo
     ref = args.ref or default_ref
+
+    if args.pull_setup:
+        pull_url = f"https://raw.githubusercontent.com/{{repo}}/{{ref}}/setup_notebook_workflow.py"
+        print(f"Pull setup: enabled ({{pull_url}})")
+    else:
+        print(f"Pull setup: disabled (using local {{root / 'setup_notebook_workflow.py'}})")
 
     if args.pull_setup:
         try:
