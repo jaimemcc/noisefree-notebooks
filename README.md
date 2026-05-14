@@ -23,6 +23,33 @@ Workflow implementation files are isolated under `tooling/notebook_workflow/` so
 
 Planned future work is tracked in [TODO.md](TODO.md), including the workflow/package update strategy across repositories.
 
+## Update Procedure
+
+To update managed workflow files in an existing repository without re-entering your original setup arguments:
+
+```powershell
+python update_notebook_workflow.py --skip-pixi
+```
+
+Or using Pixi task:
+
+```powershell
+pixi run update
+```
+
+How it works:
+- Reads managed roots from `notebook_workflow_config.json`.
+- Reuses your existing Python pin from `[tool.pixi.dependencies].python` when present.
+- Re-runs setup in overwrite mode for managed workflow files.
+
+Optional: pull setup script from a pinned GitHub ref/tag first:
+
+```powershell
+python update_notebook_workflow.py --pull-setup --repo jaimemcc/noisefree-notebooks --ref v0.1.0 --skip-pixi
+```
+
+Tip: prefer a pinned release tag (`--ref vX.Y.Z`) over branch names for reproducible updates.
+
 ## Setup options
 
 ### Option A: default setup (recommended)

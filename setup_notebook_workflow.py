@@ -22,6 +22,9 @@ from textwrap import dedent
 
 DEFAULT_PYTHON_SPEC = "3.11.*"
 PYTHON_SPEC_ALLOWED_PATTERN = re.compile(r"^[0-9A-Za-z.*<>=!,|^~+\-]+$")
+WORKFLOW_VERSION = "0.1.0"
+DEFAULT_WORKFLOW_SOURCE_REPO = "jaimemcc/noisefree-notebooks"
+DEFAULT_WORKFLOW_SOURCE_REF = "main"
 
 
 def write_text_file(path: Path, content: str, *, on_existing: str, dry_run: bool) -> str:
@@ -78,6 +81,72 @@ def resolve_source_dirs(requested_source_dirs: list[str] | None, notebook_dir: s
         seen.add(cleaned)
         normalized.append(cleaned)
     return normalized
+
+
+def load_existing_managed_roots(root: Path) -> tuple[list[str], str] | None:
+    """Read source dirs + shared tracked_subdir from existing config when available."""
+    config_path = root / "notebook_workflow_config.json"
+    if not config_path.exists():
+        return None
+
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"notebook_workflow_config.json is not valid JSON: {exc}") from exc
+
+    managed_roots = payload.get("managed_roots")
+    if not isinstance(managed_roots, list) or not managed_roots:
+        raise ValueError("notebook_workflow_config.json must define a non-empty managed_roots array")
+
+    source_dirs: list[str] = []
+    tracked_subdir: str | None = None
+    seen_sources: set[str] = set()
+    for index, entry in enumerate(managed_roots, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"managed_roots[{index}] must be an object")
+
+        source_dir_raw = entry.get("source_dir")
+        if not isinstance(source_dir_raw, str):
+            raise ValueError(f"managed_roots[{index}].source_dir must be a string")
+        source_dir = normalize_relative_repo_path(source_dir_raw, field_name=f"managed_roots[{index}].source_dir")
+        if source_dir in seen_sources:
+            raise ValueError(f"Duplicate source_dir in notebook_workflow_config.json: {source_dir}")
+        seen_sources.add(source_dir)
+        source_dirs.append(source_dir)
+
+        tracked_subdir_raw = entry.get("tracked_subdir")
+        if tracked_subdir_raw is None:
+            # Support config entries that use tracked_dir by deriving subdir when nested under source_dir.
+            tracked_dir_raw = entry.get("tracked_dir")
+            if isinstance(tracked_dir_raw, str):
+                tracked_dir = normalize_relative_repo_path(
+                    tracked_dir_raw,
+                    field_name=f"managed_roots[{index}].tracked_dir",
+                )
+                prefix = f"{source_dir}/"
+                if tracked_dir.startswith(prefix):
+                    tracked_subdir_candidate = tracked_dir[len(prefix):]
+                else:
+                    tracked_subdir_candidate = "text"
+            else:
+                tracked_subdir_candidate = "text"
+        else:
+            if not isinstance(tracked_subdir_raw, str):
+                raise ValueError(f"managed_roots[{index}].tracked_subdir must be a string")
+            tracked_subdir_candidate = normalize_relative_repo_path(
+                tracked_subdir_raw,
+                field_name=f"managed_roots[{index}].tracked_subdir",
+            )
+
+        if tracked_subdir is None:
+            tracked_subdir = tracked_subdir_candidate
+        elif tracked_subdir != tracked_subdir_candidate:
+            raise ValueError(
+                "Existing managed roots use different tracked subdirectories; "
+                "rerun setup with explicit --source-dir/--tracked-dir arguments."
+            )
+
+    return source_dirs, (tracked_subdir or "text")
 
 
 def infer_existing_pixi_python(root: Path) -> str | None:
@@ -177,10 +246,12 @@ untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_no
 preview-untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py"
 migrate-existing-notebooks-preview = "python tooling/notebook_workflow/migrate_existing_notebooks.py"
 migrate-existing-notebooks = "python tooling/notebook_workflow/migrate_existing_notebooks.py --apply-untrack --yes"
+update-notebook-workflow = "python update_notebook_workflow.py --skip-pixi"
 # Aliases for convenience
 sync = {{ depends-on = ["sync-notebooks"] }}
 regen = {{ depends-on = ["regenerate-notebooks"] }}
 check = {{ depends-on = ["check-notebooks"] }}
+update = {{ depends-on = ["update-notebook-workflow"] }}
 
 [tool.pixi.dependencies]
 python = "{python_spec}"
@@ -216,6 +287,11 @@ def create_notebook_workflow_config(
     dry_run: bool,
 ) -> None:
     content_object = {
+        "workflow": {
+            "version": WORKFLOW_VERSION,
+            "source_repo": DEFAULT_WORKFLOW_SOURCE_REPO,
+            "source_ref": DEFAULT_WORKFLOW_SOURCE_REF,
+        },
         "managed_roots": [
             {
                 "source_dir": source_dir,
@@ -226,6 +302,159 @@ def create_notebook_workflow_config(
     }
     content = json.dumps(content_object, indent=2) + "\n"
     target = root / "notebook_workflow_config.json"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
+
+
+def create_update_script(root: Path, *, on_existing: str, dry_run: bool) -> None:
+    content = f'''\
+#!/usr/bin/env python
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
+
+
+DEFAULT_WORKFLOW_SOURCE_REPO = "{DEFAULT_WORKFLOW_SOURCE_REPO}"
+DEFAULT_WORKFLOW_SOURCE_REF = "{DEFAULT_WORKFLOW_SOURCE_REF}"
+
+
+def _read_workflow_config(root: Path) -> tuple[list[str], str, str, str]:
+    config_path = root / "notebook_workflow_config.json"
+    if not config_path.exists():
+        return ["notebooks"], "text", DEFAULT_WORKFLOW_SOURCE_REPO, DEFAULT_WORKFLOW_SOURCE_REF
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    managed_roots = payload.get("managed_roots")
+    if not isinstance(managed_roots, list) or not managed_roots:
+        raise ValueError("notebook_workflow_config.json must define managed_roots")
+
+    source_dirs: list[str] = []
+    tracked_subdir: str | None = None
+    for index, entry in enumerate(managed_roots, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"managed_roots[{{index}}] must be an object")
+        source_dir = entry.get("source_dir")
+        if not isinstance(source_dir, str):
+            raise ValueError(f"managed_roots[{{index}}].source_dir must be a string")
+        source_dirs.append(source_dir)
+
+        root_tracked_subdir = entry.get("tracked_subdir", "text")
+        if not isinstance(root_tracked_subdir, str):
+            raise ValueError(f"managed_roots[{{index}}].tracked_subdir must be a string")
+        if tracked_subdir is None:
+            tracked_subdir = root_tracked_subdir
+        elif tracked_subdir != root_tracked_subdir:
+            raise ValueError("Managed roots have different tracked_subdir values; update manually with explicit setup args")
+
+    workflow = payload.get("workflow")
+    source_repo = DEFAULT_WORKFLOW_SOURCE_REPO
+    source_ref = DEFAULT_WORKFLOW_SOURCE_REF
+    if isinstance(workflow, dict):
+        repo_candidate = workflow.get("source_repo")
+        ref_candidate = workflow.get("source_ref")
+        if isinstance(repo_candidate, str) and repo_candidate.strip():
+            source_repo = repo_candidate.strip()
+        if isinstance(ref_candidate, str) and ref_candidate.strip():
+            source_ref = ref_candidate.strip()
+
+    return source_dirs, (tracked_subdir or "text"), source_repo, source_ref
+
+
+def _read_python_pin(root: Path) -> str | None:
+    pyproject_path = root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+
+    in_section = False
+    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_section = line == "[tool.pixi.dependencies]"
+            continue
+        if in_section and line.startswith("python"):
+            match = re.match(r'python\\s*=\\s*["\\']([^"\\']+)["\\']', line)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _pull_setup_script(root: Path, *, repo: str, ref: str) -> None:
+    setup_path = root / "setup_notebook_workflow.py"
+    url = f"https://raw.githubusercontent.com/{{repo}}/{{ref}}/setup_notebook_workflow.py"
+    try:
+        with urlopen(url) as response:
+            content = response.read().decode("utf-8")
+    except URLError as exc:
+        raise RuntimeError(f"Failed to download setup script from {{url}}: {{exc}}") from exc
+
+    setup_path.write_text(content, encoding="utf-8")
+    print(f"Updated setup script from {{url}}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_args = argv if argv is not None else sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        description="Update notebook workflow files using existing configuration.",
+    )
+    parser.add_argument("--pull-setup", action="store_true", help="Download setup_notebook_workflow.py from GitHub before updating")
+    parser.add_argument("--repo", help="GitHub repo in owner/name format for setup download")
+    parser.add_argument("--ref", help="Git ref/tag/sha used when downloading setup script")
+    parser.add_argument("--on-existing", choices=["overwrite", "skip", "fail"], default="overwrite")
+    parser.add_argument("--skip-pixi", action="store_true", help="Pass through to setup script")
+    parser.add_argument("--dry-run", action="store_true", help="Preview update without changing files")
+    args = parser.parse_args(argv)
+
+    root = Path.cwd()
+
+    try:
+        source_dirs, tracked_subdir, default_repo, default_ref = _read_workflow_config(root)
+    except ValueError as exc:
+        print(f"Workflow config error: {{exc}}", file=sys.stderr)
+        return 2
+
+    repo = args.repo or default_repo
+    ref = args.ref or default_ref
+
+    if args.pull_setup:
+        try:
+            _pull_setup_script(root, repo=repo, ref=ref)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    command = [sys.executable, "setup_notebook_workflow.py", "--on-existing", args.on_existing]
+    for source_dir in source_dirs:
+        command.extend(["--source-dir", source_dir])
+    command.extend(["--tracked-dir", tracked_subdir])
+
+    python_pin = _read_python_pin(root)
+    if python_pin:
+        command.extend(["--python-version", python_pin])
+
+    if args.skip_pixi:
+        command.append("--skip-pixi")
+    if args.dry_run:
+        command.append("--dry-run")
+
+    print("Running:", " ".join(command))
+    completed = subprocess.run(command, cwd=root)
+    return completed.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+    target = root / "update_notebook_workflow.py"
     status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
     report_write(target, status)
 
@@ -978,12 +1207,25 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Show what would change without writing files or running pixi commands",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
 
     root = Path.cwd()
     try:
-        source_dirs = resolve_source_dirs(args.source_dirs, args.notebook_dir)
-        tracked_subdir = normalize_relative_repo_path(args.tracked_dir, field_name="tracked_dir")
+        explicit_source_dirs = args.source_dirs is not None
+        explicit_notebook_dir = "--notebook-dir" in raw_args or "-n" in raw_args
+        explicit_tracked_dir = "--tracked-dir" in raw_args or "-t" in raw_args
+
+        existing_roots = None
+        if not explicit_source_dirs and not explicit_notebook_dir and not explicit_tracked_dir:
+            existing_roots = load_existing_managed_roots(root)
+
+        if existing_roots is not None:
+            source_dirs, tracked_subdir = existing_roots
+            source_resolution = "existing notebook_workflow_config.json"
+        else:
+            source_dirs = resolve_source_dirs(args.source_dirs, args.notebook_dir)
+            tracked_subdir = normalize_relative_repo_path(args.tracked_dir, field_name="tracked_dir")
+            source_resolution = "CLI/default arguments"
     except ValueError as exc:
         print(f"⚠️  {exc}", file=sys.stderr)
         return 2
@@ -999,6 +1241,7 @@ def main(argv: list[str] | None = None) -> int:
     for source_dir in source_dirs:
         print(f"     - {source_dir}/")
     print(f"   Tracked subdirectory (per source): {tracked_subdir}/\n")
+    print(f"   Managed roots source: {source_resolution}")
     print(f"   Pixi Python: {python_spec} (from {python_spec_source})\n")
 
     # Create configuration files
@@ -1024,6 +1267,7 @@ def main(argv: list[str] | None = None) -> int:
         create_precommit_config(root, on_existing=args.on_existing, dry_run=args.dry_run)
         create_github_workflow(root, on_existing=args.on_existing, dry_run=args.dry_run)
         create_scripts(root, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_update_script(root, on_existing=args.on_existing, dry_run=args.dry_run)
     except FileExistsError as exc:
         print(f"⚠️  {exc}", file=sys.stderr)
         print("Use --on-existing overwrite to replace managed files, or --on-existing skip to keep them.", file=sys.stderr)
