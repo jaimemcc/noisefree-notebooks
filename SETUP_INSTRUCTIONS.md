@@ -4,7 +4,32 @@ This document describes two scenarios:
 1. Setting up the notebook workflow in a **new fresh repository**
 2. Adding the notebook workflow to an **existing repository**
 
-## Scenario 1: Fresh Repository Setup
+## Quick Start: Automated Setup (Recommended)
+
+The fastest way to set up the workflow is using the automated setup script:
+
+```powershell
+# Copy setup_notebook_workflow.py to your repo, then run:
+python setup_notebook_workflow.py
+
+# Or with custom directories:
+python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+```
+
+This script automatically creates:
+- ✅ Directory structure
+- ✅ All config files (pyproject.toml, .gitignore, .pre-commit-config.yaml)
+- ✅ All scripts (sync, check, regen, bootstrap)
+- ✅ GitHub Actions workflow
+- ✅ Runs `pixi install` and `pixi run bootstrap`
+
+**Then you're done.** Just create your first notebook and run `pixi run sync`.
+
+---
+
+## Scenario 1: Fresh Repository Setup (Manual)
+
+If you prefer manual setup instead of using the script, follow these steps:
 
 ### Step 1: Create repository structure
 
@@ -48,12 +73,14 @@ check = { depends-on = ["check-notebooks"] }
 **`.gitignore`**:
 ```
 notebooks/*.ipynb
-notebooks/text/
 .pytest_cache/
 .ruff_cache/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+```
+
+⚠️ **Important**: Only ignore `.ipynb` files, NOT `notebooks/text/`. The `.py` files in `notebooks/text/` must be tracked in git.
 ```
 
 **`.pre-commit-config.yaml`**:
@@ -371,8 +398,19 @@ git commit -m "initial notebook workflow setup"
 ---
 
 ## Scenario 2: Adding Notebook Workflow to Existing Repository
+### Option A: Using Automated Setup (Recommended)
 
-### Step 1: Back up your existing notebooks
+```powershell
+# Copy setup_notebook_workflow.py to your repo root, then:
+python setup_notebook_workflow.py
+```
+
+This sets up all the workflow files automatically. Then continue with Step 3 below to migrate your existing notebooks.
+
+### Option B: Manual Setup
+
+#### Step 1: Back up your existing notebooks (Manual)
+
 
 If you already have `.ipynb` files you want to keep, back them up:
 
@@ -381,13 +419,13 @@ mkdir notebooks_backup
 Copy-Item notebooks/*.ipynb notebooks_backup/ -Recurse
 ```
 
-### Step 2: Add the workflow files
+#### Step 2: Add the workflow files (Manual)
 
 Add all the files from **Scenario 1 Steps 2–3** to your repo. If you already have a `pyproject.toml`, add the `[tool.jupytext]`, `[tool.pixi.workspace]`, etc. sections to it.
 
 Create the `scripts/` directory and add all four Python scripts.
 
-### Step 3: Move existing notebooks into the new structure
+### Step 3: Migrate Your Existing Notebooks
 
 For each `.ipynb` file you want to keep:
 
@@ -406,7 +444,7 @@ pixi run sync
 Remove-Item notebooks/analysis.ipynb  # Keep only the .py tracked
 ```
 
-### Step 4: Initialize Pixi and bootstrap
+#### Step 4: Initialize Pixi and bootstrap (Manual Setup Only)
 
 ```powershell
 pixi install
@@ -451,4 +489,86 @@ Make sure `.gitignore` includes `notebooks/*.ipynb` and `notebooks/text/` as sho
 | Pre-commit hook failing | Run `pixi run check` to see the exact issue |
 | Sync check fails after editing | Run `pixi run sync` to regenerate the `.py` |
 | "Notebook does not appear to be JSON" | Delete the empty `.ipynb` file and regenerate it |
+
+---
+
+## Customizing Directory Names
+
+The setup script makes it easy to use different directory names for your notebooks. Just pass options when running the setup:
+
+```powershell
+# Use "analysis" instead of "notebooks"
+python setup_notebook_workflow.py --notebook-dir analysis
+
+# Use ".tracked" instead of "text"
+python setup_notebook_workflow.py --tracked-dir .tracked
+
+# Combine both
+python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+```
+
+The script updates **all** configuration files and Python scripts automatically—no manual editing needed. This is much faster than trying to modify paths in multiple files.
+
+### Supported Setup Script Options
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `--notebook-dir` | `notebooks` | Directory for source `.ipynb` files |
+| `--tracked-dir` | `text` | Subdirectory within notebook-dir for tracked `.py` files |
+| `--skip-pixi` | — | Skip `pixi install` and bootstrap (useful for testing/CI) |
+
+### Example: Multi-project Setup
+
+If you have multiple project folders with different naming conventions, the setup script adapts:
+
+```powershell
+# Project 1: use "notebooks/text"
+cd project1
+python ../setup_notebook_workflow.py
+
+# Project 2: use "analysis/.tracked"
+cd ../project2
+python ../setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+```
+
+Each project gets properly configured files tailored to its chosen directory structure.
+
+---
+
+## File Structure After Setup
+
+The setup script creates the following structure (default paths):
+
+```
+my-repo/
+├── .github/workflows/
+│   └── notebook-policy.yml          (GitHub Actions CI)
+├── scripts/
+│   ├── sync_notebooks.py            (convert .ipynb → .py)
+│   ├── check_notebook_sync.py       (validate sync)
+│   ├── check_notebook_policy.py     (enforce policy)
+│   └── regenerate_notebooks.py      (convert .py → .ipynb)
+├── notebooks/                       (configurable with --notebook-dir)
+│   ├── analysis.ipynb               (local, never committed)
+│   ├── exploration.ipynb            (local, never committed)
+│   └── text/                        (configurable with --tracked-dir)
+│       ├── analysis.py              (tracked in git)
+│       └── exploration.py           (tracked in git)
+├── pyproject.toml                   (Pixi + Jupytext config)
+├── .gitignore                       (ignores .ipynb, tracks .py)
+├── .pre-commit-config.yaml          (git hooks config)
+├── setup_notebook_workflow.py       (the setup script itself)
+└── README.md                        (your project docs)
+```
+
+If you used different directory names, the structure adapts accordingly:
+
+```
+my-repo/
+├── analysis/                        (if --notebook-dir analysis)
+│   ├── report.ipynb
+│   └── .tracked/                    (if --tracked-dir .tracked)
+│       └── report.py
+└── ...
+```
 
