@@ -224,6 +224,40 @@ def test_existing_notebooks_are_reported_for_initial_sync():
         return True
 
 
+def test_existing_gitignore_gets_notebook_entries():
+    """Ensure setup appends managed notebook ignore rules to an existing .gitignore."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root = Path(tmpdir)
+        (test_root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+
+        setup_script = Path("setup_notebook_workflow.py")
+        if setup_script.exists():
+            shutil.copy(setup_script, test_root / "setup_notebook_workflow.py")
+
+        result = subprocess.run(
+            [sys.executable, "setup_notebook_workflow.py", "--skip-pixi", "--on-existing", "skip"],
+            cwd=test_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+
+        if result.returncode != 0:
+            print("❌ setup_notebook_workflow.py failed while updating existing .gitignore:")
+            print(result.stderr)
+            return False
+
+        gitignore_content = (test_root / ".gitignore").read_text(encoding="utf-8")
+        for expected_line in ["dist/", "notebooks/**/*.ipynb", ".ipynb_checkpoints/"]:
+            if expected_line not in gitignore_content:
+                print(f"❌ Existing .gitignore is missing expected entry: {expected_line}")
+                return False
+
+        print("✓ existing .gitignore files get managed notebook ignore entries")
+        return True
+
+
 def test_generated_script_syntax():
     """Test that generated scripts have valid Python syntax."""
     scripts_to_check = [
@@ -299,6 +333,7 @@ def main():
         ("Generated pyproject platforms", test_generated_pyproject_platforms),
         ("Existing pixi.toml merge", test_existing_pixi_toml_gets_workflow_entries),
         ("Existing notebook sync guidance", test_existing_notebooks_are_reported_for_initial_sync),
+        ("Existing gitignore merge", test_existing_gitignore_gets_notebook_entries),
     ]
     
     results = []

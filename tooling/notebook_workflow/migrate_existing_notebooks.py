@@ -46,7 +46,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nTotal tracked managed notebooks: {len(tracked)}")
 
         if not args.apply_untrack:
-            print("\nPreview mode only. Re-run with --apply-untrack --yes to untrack these files.")
+            print("\nPreview only: no git index changes were made.")
+            print("Recommended migration flow:")
+            print("  1. Review the tracked managed notebooks listed above.")
+            print("  2. Run 'pixi run migrate-existing-notebooks' to untrack, sync, and validate in one step.")
+            print("  3. Review 'git status', then stage and commit the result.")
+            print("Advanced/manual option: re-run this script with --apply-untrack --yes.")
             return 0
 
         if not args.yes:
@@ -76,7 +81,10 @@ def main(argv: list[str] | None = None) -> int:
         return check_policy_rc
 
     print("\nMigration checks passed.")
-    print("Next: review git status, then commit the staged/untracked changes.")
+    print("Next steps:")
+    print("  1. Review 'git status' to confirm the notebook removals and tracked .py additions.")
+    print("  2. Run 'git add .' to stage the cleaned working tree.")
+    print("  3. Commit the migration.")
     return 0
 
 

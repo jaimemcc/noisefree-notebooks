@@ -22,7 +22,7 @@ By default, setup is safe for established repositories:
 
 2. **Commit the generated workflow files** to establish a clean baseline before adding notebooks:
    ```powershell
-	git add pyproject.toml pixi.toml tooling/ notebook_workflow_config.json
+	git add .
    git commit -m "Set up notebook workflow with Pixi + Jupytext"
    ```
    This separates infrastructure changes from your notebook content changes, making git history clearer and updates easier.
@@ -90,11 +90,11 @@ python update_notebook_workflow.py --pull-setup --repo jaimemcc/noisefree-notebo
 
 Tip: prefer a pinned release tag (`--ref vX.Y.Z`) over branch names for reproducible updates.
 
-Important for CI (`pixi install --locked`): if `pyproject.toml` changed during setup/update or after adding packages, regenerate and commit `pixi.lock`.
+Important for CI (`pixi install --locked`): if `pyproject.toml`, `pixi.toml`, or dependencies changed during setup/update or after adding packages, regenerate and commit `pixi.lock`.
 
 ```powershell
 pixi lock
- git add pyproject.toml pixi.toml pixi.lock
+git add .
 git commit -m "Refresh Pixi lockfile"
 ```
 
@@ -173,9 +173,8 @@ pixi run migrate-existing-notebooks
 
 This migration flow:
 1. Previews tracked managed `.ipynb` files.
-2. Optionally untracks them from git.
-3. Syncs notebooks.
-4. Verifies sync and policy checks.
+2. Runs `pixi run migrate-existing-notebooks` to untrack them from git, sync notebooks, and verify sync/policy checks in one step.
+3. Reviews `git status`, stages with `git add .`, and commits the migration.
 
 ## Multiple notebook roots (supported)
 
@@ -210,7 +209,7 @@ Notes:
 - You can also use `tracked_dir` if you want a repository-relative tracked location.
 - All workflow commands (`sync`, `regen`, `check`, policy, untrack, migration) use this config.
 
-If you add new notebook roots, also update `.gitignore` so managed `.ipynb` files stay untracked.
+If you add new notebook roots, rerun setup or the workflow updater so `.gitignore` picks up the new managed `.ipynb` paths automatically.
 
 ## After setup (daily use)
 

@@ -544,7 +544,37 @@ def create_gitignore(root: Path, source_dirs: list[str], *, on_existing: str, dr
     ]
     content = "\n".join(content_lines) + "\n"
     target = root / ".gitignore"
-    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+
+    if target.exists():
+        existing_lines = target.read_text(encoding="utf-8").splitlines()
+        required_lines = [
+            "# Notebook binaries (track .py via Jupytext instead)",
+            *notebook_lines,
+            ".ipynb_checkpoints/",
+        ]
+        missing_lines = [line for line in required_lines if line not in existing_lines]
+
+        if not missing_lines:
+            status = "skipped"
+        elif on_existing == "fail":
+            raise FileExistsError(f"Refusing to update existing file: {target}")
+        elif dry_run:
+            status = "would-overwrite"
+        else:
+            appended_lines = [""]
+            if "# Notebook binaries (track .py via Jupytext instead)" in missing_lines:
+                appended_lines.append("# Notebook binaries (track .py via Jupytext instead)")
+            for notebook_line in notebook_lines:
+                if notebook_line in missing_lines:
+                    appended_lines.append(notebook_line)
+            if ".ipynb_checkpoints/" in missing_lines:
+                appended_lines.extend(["", "# Jupyter", ".ipynb_checkpoints/"])
+
+            target.write_text("\n".join(existing_lines + appended_lines).rstrip() + "\n", encoding="utf-8")
+            status = "overwritten"
+    else:
+        status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+
     report_write(target, status)
 
 
@@ -1378,7 +1408,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\\nTotal tracked managed notebooks: {len(tracked)}")
 
         if not args.apply_untrack:
-            print("\\nPreview mode only. Re-run with --apply-untrack --yes to untrack these files.")
+            print("\nPreview only: no git index changes were made.")
+            print("Recommended migration flow:")
+            print("  1. Review the tracked managed notebooks listed above.")
+            print("  2. Run 'pixi run migrate-existing-notebooks' to untrack, sync, and validate in one step.")
+            print("  3. Review 'git status', then stage and commit the result.")
+            print("Advanced/manual option: re-run this script with --apply-untrack --yes.")
             return 0
 
         if not args.yes:
@@ -1407,8 +1442,11 @@ def main(argv: list[str] | None = None) -> int:
     if check_policy_rc != 0:
         return check_policy_rc
 
-    print("\\nMigration checks passed.")
-    print("Next: review git status, then commit the staged/untracked changes.")
+    print("\nMigration checks passed.")
+    print("Next steps:")
+    print("  1. Review 'git status' to confirm the notebook removals and tracked .py additions.")
+    print("  2. Run 'git add .' to stage the cleaned working tree.")
+    print("  3. Commit the migration.")
     return 0
 
 
@@ -1606,7 +1644,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest_args = " ".join(manifest_paths)
     print("Next steps:")
     print(f"  0. Commit generated workflow files to establish clean baseline:")
-    print(f"     git add {manifest_args} tooling/ notebook_workflow_config.json")
+    print(f"     git add .")
     print(f"     git commit -m 'Set up notebook workflow with Pixi + Jupytext'")
     print(f"  1. Create your first notebook in {source_dirs[0]}/<name>.ipynb")
     print(f"  2. Run: pixi run sync")
