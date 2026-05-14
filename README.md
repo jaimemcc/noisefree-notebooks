@@ -9,7 +9,7 @@ Use [setup_notebook_workflow.py](setup_notebook_workflow.py) to install the work
 By default, setup is safe for established repositories:
 - Existing managed files are preserved (`--on-existing skip`).
 - Managed files can be previewed without changes (`--dry-run`).
-- The script runs `pixi install` and `pixi run bootstrap` unless `--skip-pixi` is used.
+- The script runs `pixi install` and then tries `pixi run bootstrap`, falling back to `pixi run --executable pre-commit install` when the bootstrap task is not available.
 
 ## Getting Started
 

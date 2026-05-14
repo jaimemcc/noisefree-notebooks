@@ -56,6 +56,29 @@ def report_write(path: Path, status: str) -> None:
     print(f"{labels.get(status, '•')} {path}")
 
 
+def bootstrap_pre_commit_hooks(root: Path) -> int:
+    """Install pre-commit hooks, falling back to a direct executable call."""
+    print("\n🚀 Bootstrapping pre-commit hooks...")
+
+    result = subprocess.run(["pixi", "run", "bootstrap"], cwd=root)
+    if result.returncode == 0:
+        return 0
+
+    print(
+        "   bootstrap task was not available; trying pre-commit directly through Pixi...",
+        file=sys.stderr,
+    )
+    result = subprocess.run(["pixi", "run", "--executable", "pre-commit", "install"], cwd=root)
+    if result.returncode == 0:
+        return 0
+
+    print(
+        "⚠️  pre-commit bootstrap failed. Run 'pixi run --executable pre-commit install' manually.",
+        file=sys.stderr,
+    )
+    return result.returncode
+
+
 def normalize_relative_repo_path(path_text: str, *, field_name: str) -> str:
     candidate = Path(path_text)
     if candidate.is_absolute():
@@ -1338,10 +1361,7 @@ def main(argv: list[str] | None = None) -> int:
             print("⚠️  pixi install failed. Install Pixi from https://pixi.sh and try again.", file=sys.stderr)
             return 1
 
-        print("\n🚀 Bootstrapping pre-commit hooks...")
-        result = subprocess.run(["pixi", "run", "bootstrap"], cwd=root)
-        if result.returncode != 0:
-            print("⚠️  bootstrap failed. Run 'pixi run bootstrap' manually.", file=sys.stderr)
+        if bootstrap_pre_commit_hooks(root) != 0:
             return 1
 
     print("\n" + "=" * 60)
