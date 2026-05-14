@@ -11,6 +11,14 @@ By default, setup is safe for established repositories:
 - Managed files can be previewed without changes (`--dry-run`).
 - The script runs `pixi install` and `pixi run bootstrap` unless `--skip-pixi` is used.
 
+## Tooling layout
+
+Workflow implementation files are isolated under `tooling/notebook_workflow/` so they are clearly infrastructure, not project code.
+
+- Daily commands (`pixi run sync`, `pixi run check`, `pixi run regen`) stay the same.
+- `scripts/` contains compatibility wrappers only.
+- New repositories created with `setup_notebook_workflow.py` now generate workflow scripts under `tooling/notebook_workflow/`.
+
 ## Setup options
 
 ### Option A: default setup (recommended)
@@ -36,6 +44,24 @@ python setup_notebook_workflow.py --on-existing skip --dry-run
 ```powershell
 python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir text
 ```
+
+### Option E: select Pixi Python version
+
+```powershell
+python setup_notebook_workflow.py --python-version 3.12.*
+```
+
+Behavior when `--python-version` is omitted:
+- If `pyproject.toml` already has `[tool.pixi.dependencies] python = ...`, that pin is reused.
+- Otherwise the setup default is `3.11.*`.
+
+Validation:
+- Setup now fails fast if the Python spec is malformed.
+- Valid examples: `3.11.*`, `3.12.*`, `>=3.11,<3.13`.
+
+Important distinction:
+- The Python interpreter used to run `setup_notebook_workflow.py` does not control your project runtime.
+- Your project/runtime Python comes from the Pixi environment pin in `pyproject.toml`.
 
 ## Existing repository migration
 

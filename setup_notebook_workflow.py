@@ -13,8 +13,13 @@ from __future__ import annotations
 import argparse
 import sys
 import subprocess
+import re
 from pathlib import Path
 from textwrap import dedent
+
+
+DEFAULT_PYTHON_SPEC = "3.11.*"
+PYTHON_SPEC_ALLOWED_PATTERN = re.compile(r"^[0-9A-Za-z.*<>=!,|^~+\-]+$")
 
 
 def write_text_file(path: Path, content: str, *, on_existing: str, dry_run: bool) -> str:
@@ -46,7 +51,78 @@ def report_write(path: Path, status: str) -> None:
     print(f"{labels.get(status, '•')} {path}")
 
 
-def create_pyproject_toml(root: Path, notebook_dir: str, tracked_dir: str, *, on_existing: str, dry_run: bool) -> None:
+def infer_existing_pixi_python(root: Path) -> str | None:
+    """Read existing [tool.pixi.dependencies].python pin from pyproject.toml if present."""
+    pyproject_path = root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+
+    in_pixi_dependencies = False
+    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("[") and line.endswith("]"):
+            in_pixi_dependencies = line == "[tool.pixi.dependencies]"
+            continue
+
+        if in_pixi_dependencies and line.startswith("python"):
+            match = re.match(r'python\s*=\s*["\']([^"\']+)["\']', line)
+            if match:
+                return match.group(1)
+    return None
+
+
+def validate_python_spec(python_spec: str) -> str:
+    """Validate a Pixi-compatible Python version spec and normalize whitespace."""
+    normalized = python_spec.strip()
+    if not normalized:
+        raise ValueError(
+            "Invalid Python version spec: value is empty. Use examples like '3.11.*', '3.12.*', or '>=3.11,<3.13'."
+        )
+
+    if any(ch.isspace() for ch in normalized):
+        raise ValueError(
+            "Invalid Python version spec: whitespace is not allowed. Use examples like '3.11.*' or '>=3.11,<3.13'."
+        )
+
+    if not PYTHON_SPEC_ALLOWED_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Invalid Python version spec: contains unsupported characters. "
+            "Use examples like '3.11.*', '3.12.*', or '>=3.11,<3.13'."
+        )
+
+    if not any(ch.isdigit() for ch in normalized):
+        raise ValueError(
+            "Invalid Python version spec: must contain at least one digit. "
+            "Use examples like '3.11.*' or '>=3.11,<3.13'."
+        )
+
+    return normalized
+
+
+def resolve_python_spec(root: Path, requested_python_spec: str | None) -> tuple[str, str]:
+    """Choose python spec from CLI, existing pyproject, or default."""
+    if requested_python_spec:
+        return validate_python_spec(requested_python_spec), "--python-version"
+
+    existing_python_spec = infer_existing_pixi_python(root)
+    if existing_python_spec:
+        return validate_python_spec(existing_python_spec), "existing pyproject.toml"
+
+    return validate_python_spec(DEFAULT_PYTHON_SPEC), "default"
+
+
+def create_pyproject_toml(
+    root: Path,
+    notebook_dir: str,
+    tracked_dir: str,
+    python_spec: str,
+    *,
+    on_existing: str,
+    dry_run: bool,
+) -> None:
     """Generate pyproject.toml with Pixi and Jupytext configuration."""
     content = f'''\
 [tool.jupytext]
@@ -63,19 +139,22 @@ pre-commit = ">=3.7"
 
 [tool.pixi.tasks]
 bootstrap = "pre-commit install"
-check-notebook-policy = "python scripts/check_notebook_policy.py"
-check-notebook-sync = "python scripts/check_notebook_sync.py"
+check-notebook-policy = "python tooling/notebook_workflow/check_notebook_policy.py"
+check-notebook-sync = "python tooling/notebook_workflow/check_notebook_sync.py"
 check-notebooks = {{ depends-on = ["check-notebook-policy", "check-notebook-sync"] }}
-sync-notebooks = "python scripts/sync_notebooks.py"
-regenerate-notebooks = "python scripts/regenerate_notebooks.py"
-untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py --apply --yes"
-preview-untrack-managed-notebooks = "python scripts/untrack_managed_notebooks.py"
-migrate-existing-notebooks-preview = "python scripts/migrate_existing_notebooks.py"
-migrate-existing-notebooks = "python scripts/migrate_existing_notebooks.py --apply-untrack --yes"
+sync-notebooks = "python tooling/notebook_workflow/sync_notebooks.py"
+regenerate-notebooks = "python tooling/notebook_workflow/regenerate_notebooks.py"
+untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py --apply --yes"
+preview-untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py"
+migrate-existing-notebooks-preview = "python tooling/notebook_workflow/migrate_existing_notebooks.py"
+migrate-existing-notebooks = "python tooling/notebook_workflow/migrate_existing_notebooks.py --apply-untrack --yes"
 # Aliases for convenience
 sync = {{ depends-on = ["sync-notebooks"] }}
 regen = {{ depends-on = ["regenerate-notebooks"] }}
 check = {{ depends-on = ["check-notebooks"] }}
+
+[tool.pixi.dependencies]
+python = "{python_spec}"
 '''
     target = root / "pyproject.toml"
     status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
@@ -105,12 +184,12 @@ repos:
     hooks:
       - id: notebook-policy
         name: notebook-policy
-        entry: pixi run python scripts/check_notebook_policy.py --staged
+        entry: pixi run python tooling/notebook_workflow/check_notebook_policy.py --staged
         language: system
         pass_filenames: false
       - id: notebook-sync
         name: notebook-sync
-        entry: pixi run python scripts/check_notebook_sync.py
+        entry: pixi run python tooling/notebook_workflow/check_notebook_sync.py
         language: system
         pass_filenames: false
 '''
@@ -158,7 +237,7 @@ jobs:
 
 def create_scripts(root: Path, notebook_dir: str, tracked_dir: str, *, on_existing: str, dry_run: bool) -> None:
     """Generate workflow scripts with proper path configuration."""
-    scripts_dir = root / "scripts"
+    scripts_dir = root / "tooling" / "notebook_workflow"
     if not dry_run:
         scripts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -171,7 +250,7 @@ from pathlib import Path
 import jupytext
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
 
@@ -222,7 +301,7 @@ from pathlib import Path
 import jupytext
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
 
@@ -287,7 +366,7 @@ from pathlib import Path
 import jupytext
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
 
@@ -346,7 +425,7 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MANAGED_NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 
 
@@ -401,7 +480,7 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MANAGED_NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 
 
@@ -489,7 +568,7 @@ from pathlib import Path
 from untrack_managed_notebooks import tracked_managed_notebooks
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_step(command: list[str], *, step_name: str) -> int:
@@ -536,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         untrack_rc = run_step(
-            [sys.executable, "scripts/untrack_managed_notebooks.py", "--apply", "--yes"],
+            [sys.executable, "tooling/notebook_workflow/untrack_managed_notebooks.py", "--apply", "--yes"],
             step_name="untrack",
         )
         if untrack_rc != 0:
@@ -544,15 +623,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("No tracked managed .ipynb files found.")
 
-    sync_rc = run_step([sys.executable, "scripts/sync_notebooks.py"], step_name="sync")
+    sync_rc = run_step([sys.executable, "tooling/notebook_workflow/sync_notebooks.py"], step_name="sync")
     if sync_rc != 0:
         return sync_rc
 
-    check_sync_rc = run_step([sys.executable, "scripts/check_notebook_sync.py"], step_name="check-sync")
+    check_sync_rc = run_step([sys.executable, "tooling/notebook_workflow/check_notebook_sync.py"], step_name="check-sync")
     if check_sync_rc != 0:
         return check_sync_rc
 
-    check_policy_rc = run_step([sys.executable, "scripts/check_notebook_policy.py"], step_name="check-policy")
+    check_policy_rc = run_step([sys.executable, "tooling/notebook_workflow/check_notebook_policy.py"], step_name="check-policy")
     if check_policy_rc != 0:
         return check_policy_rc
 
@@ -568,7 +647,7 @@ if __name__ == "__main__":
     migrate_status = write_text_file(migrate_target, migrate_script, on_existing=on_existing, dry_run=dry_run)
     report_write(migrate_target, migrate_status)
 
-    print("✓ Script generation completed in scripts/")
+    print("✓ Script generation completed in tooling/notebook_workflow/")
 
 
 def create_directories(root: Path, notebook_dir: str, tracked_dir: str, *, dry_run: bool) -> None:
@@ -611,6 +690,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip pixi install and bootstrap (useful for testing)",
     )
     parser.add_argument(
+        "--python-version",
+        help=(
+            "Python version/spec for [tool.pixi.dependencies].python "
+            f"(example: 3.11.*). Defaults to existing pyproject pin when present, otherwise {DEFAULT_PYTHON_SPEC}."
+        ),
+    )
+    parser.add_argument(
         "--on-existing",
         choices=["skip", "overwrite", "fail"],
         default="skip",
@@ -624,10 +710,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path.cwd()
+    try:
+        python_spec, python_spec_source = resolve_python_spec(root, args.python_version)
+    except ValueError as exc:
+        print(f"⚠️  {exc}", file=sys.stderr)
+        return 2
 
     print("\n📋 Setting up notebook workflow...")
     print(f"   Notebook directory: {args.notebook_dir}/")
     print(f"   Tracked directory: {args.notebook_dir}/{args.tracked_dir}/\n")
+    print(f"   Pixi Python: {python_spec} (from {python_spec_source})\n")
 
     # Create configuration files
     create_directories(root, args.notebook_dir, args.tracked_dir, dry_run=args.dry_run)
@@ -637,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
             root,
             args.notebook_dir,
             args.tracked_dir,
+            python_spec,
             on_existing=args.on_existing,
             dry_run=args.dry_run,
         )
