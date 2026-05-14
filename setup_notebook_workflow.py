@@ -6,11 +6,13 @@ Usage:
     python setup_notebook_workflow.py                    # Default: notebooks/ and notebooks/text/
     python setup_notebook_workflow.py --notebook-dir notebooks --tracked-dir text
     python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+    python setup_notebook_workflow.py --source-dir scripts --source-dir analysis/notebooks --tracked-dir text
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import subprocess
 import re
@@ -49,6 +51,33 @@ def report_write(path: Path, status: str) -> None:
         "would-overwrite": "• Dry run would update",
     }
     print(f"{labels.get(status, '•')} {path}")
+
+
+def normalize_relative_repo_path(path_text: str, *, field_name: str) -> str:
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        raise ValueError(f"{field_name} must be repository-relative, got absolute path: {path_text}")
+
+    cleaned = Path(*[part for part in candidate.parts if part not in ("", ".")])
+    if not cleaned.parts:
+        raise ValueError(f"{field_name} cannot be empty")
+    if ".." in cleaned.parts:
+        raise ValueError(f"{field_name} cannot contain '..': {path_text}")
+    return str(cleaned).replace("\\", "/")
+
+
+def resolve_source_dirs(requested_source_dirs: list[str] | None, notebook_dir: str) -> list[str]:
+    source_values = requested_source_dirs if requested_source_dirs else [notebook_dir]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(source_values, start=1):
+        cleaned = normalize_relative_repo_path(raw, field_name=f"source_dir[{index}]")
+        if cleaned in seen:
+            raise ValueError(f"Duplicate source directory specified: {cleaned}")
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
 
 
 def infer_existing_pixi_python(root: Path) -> str | None:
@@ -161,17 +190,42 @@ python = "{python_spec}"
     report_write(target, status)
 
 
-def create_gitignore(root: Path, notebook_dir: str, *, on_existing: str, dry_run: bool) -> None:
+def create_gitignore(root: Path, source_dirs: list[str], *, on_existing: str, dry_run: bool) -> None:
     """Generate .gitignore that ignores .ipynb but tracks .py."""
-    content = f'''\
-{notebook_dir}/*.ipynb
-.pytest_cache/
-.ruff_cache/
-# pixi environments
-.pixi/*
-!.pixi/config.toml
-'''
+    notebook_lines = [f"{source_dir}/**/*.ipynb" for source_dir in source_dirs]
+    content_lines = [
+        *notebook_lines,
+        ".pytest_cache/",
+        ".ruff_cache/",
+        "# pixi environments",
+        ".pixi/*",
+        "!.pixi/config.toml",
+    ]
+    content = "\n".join(content_lines) + "\n"
     target = root / ".gitignore"
+    status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+    report_write(target, status)
+
+
+def create_notebook_workflow_config(
+    root: Path,
+    source_dirs: list[str],
+    tracked_subdir: str,
+    *,
+    on_existing: str,
+    dry_run: bool,
+) -> None:
+    content_object = {
+        "managed_roots": [
+            {
+                "source_dir": source_dir,
+                "tracked_subdir": tracked_subdir,
+            }
+            for source_dir in source_dirs
+        ]
+    }
+    content = json.dumps(content_object, indent=2) + "\n"
+    target = root / "notebook_workflow_config.json"
     status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
     report_write(target, status)
 
@@ -235,46 +289,239 @@ jobs:
     report_write(target, status)
 
 
-def create_scripts(root: Path, notebook_dir: str, tracked_dir: str, *, on_existing: str, dry_run: bool) -> None:
-    """Generate workflow scripts with proper path configuration."""
+def create_scripts(root: Path, *, on_existing: str, dry_run: bool) -> None:
+    """Generate workflow scripts in tooling/notebook_workflow/."""
     scripts_dir = root / "tooling" / "notebook_workflow"
     if not dry_run:
         scripts_dir.mkdir(parents=True, exist_ok=True)
 
-    # Script 1: sync_notebooks.py
-    sync_script = f'''\
+    script_map: dict[str, str] = {
+        "__init__.py": '"""Notebook workflow infrastructure utilities."""\n',
+        "notebook_workflow_config.py": '''\
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+CONFIG_FILENAME = "notebook_workflow_config.json"
+DEFAULT_SOURCE_DIR = "notebooks"
+DEFAULT_TRACKED_SUBDIR = "text"
+
+
+@dataclass(frozen=True)
+class ManagedRoot:
+    source_dir: Path
+    tracked_dir: Path
+    source_label: str
+    tracked_label: str
+
+
+def _normalize_relative_path(path_text: str, *, field_name: str) -> Path:
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        raise ValueError(f"{field_name} must be repository-relative, got absolute path: {path_text}")
+
+    cleaned = Path(*[part for part in candidate.parts if part not in ("", ".")])
+    if not cleaned.parts:
+        raise ValueError(f"{field_name} cannot be empty")
+    if ".." in cleaned.parts:
+        raise ValueError(f"{field_name} cannot contain '..': {path_text}")
+    return cleaned
+
+
+def _default_managed_roots(root: Path) -> list[ManagedRoot]:
+    source_rel = Path(DEFAULT_SOURCE_DIR)
+    tracked_rel = source_rel / DEFAULT_TRACKED_SUBDIR
+    return [
+        ManagedRoot(
+            source_dir=root / source_rel,
+            tracked_dir=root / tracked_rel,
+            source_label=str(source_rel).replace("\\\\", "/"),
+            tracked_label=str(tracked_rel).replace("\\\\", "/"),
+        )
+    ]
+
+
+def load_managed_roots(root: Path) -> list[ManagedRoot]:
+    config_path = root / CONFIG_FILENAME
+    if not config_path.exists():
+        return _default_managed_roots(root)
+
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{CONFIG_FILENAME} is not valid JSON: {exc}") from exc
+
+    managed_roots = raw.get("managed_roots")
+    if not isinstance(managed_roots, list) or not managed_roots:
+        raise ValueError(f"{CONFIG_FILENAME} must define a non-empty 'managed_roots' array")
+
+    parsed: list[ManagedRoot] = []
+    seen_sources: set[Path] = set()
+
+    for index, entry in enumerate(managed_roots, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"managed_roots[{index}] must be an object")
+
+        source_dir_text = entry.get("source_dir")
+        if not isinstance(source_dir_text, str):
+            raise ValueError(f"managed_roots[{index}].source_dir must be a string")
+        source_rel = _normalize_relative_path(source_dir_text, field_name=f"managed_roots[{index}].source_dir")
+
+        tracked_dir_text = entry.get("tracked_dir")
+        tracked_subdir_text = entry.get("tracked_subdir")
+
+        if tracked_dir_text is not None and tracked_subdir_text is not None:
+            raise ValueError(
+                f"managed_roots[{index}] cannot set both tracked_dir and tracked_subdir; use one"
+            )
+
+        if tracked_dir_text is not None:
+            if not isinstance(tracked_dir_text, str):
+                raise ValueError(f"managed_roots[{index}].tracked_dir must be a string")
+            tracked_rel = _normalize_relative_path(
+                tracked_dir_text,
+                field_name=f"managed_roots[{index}].tracked_dir",
+            )
+        else:
+            if tracked_subdir_text is None:
+                tracked_subdir_text = DEFAULT_TRACKED_SUBDIR
+            if not isinstance(tracked_subdir_text, str):
+                raise ValueError(f"managed_roots[{index}].tracked_subdir must be a string")
+            tracked_subdir_rel = _normalize_relative_path(
+                tracked_subdir_text,
+                field_name=f"managed_roots[{index}].tracked_subdir",
+            )
+            tracked_rel = source_rel / tracked_subdir_rel
+
+        if source_rel in seen_sources:
+            raise ValueError(f"Duplicate source_dir in {CONFIG_FILENAME}: {source_rel}")
+        seen_sources.add(source_rel)
+
+        parsed.append(
+            ManagedRoot(
+                source_dir=root / source_rel,
+                tracked_dir=root / tracked_rel,
+                source_label=str(source_rel).replace("\\\\", "/"),
+                tracked_label=str(tracked_rel).replace("\\\\", "/"),
+            )
+        )
+
+    return parsed
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    return parent == path or parent in path.parents
+
+
+def collect_source_notebooks(managed_roots: list[ManagedRoot]) -> list[tuple[ManagedRoot, Path]]:
+    notebooks: list[tuple[ManagedRoot, Path]] = []
+    for managed_root in managed_roots:
+        if not managed_root.source_dir.exists():
+            continue
+
+        for path in managed_root.source_dir.rglob("*.ipynb"):
+            if not path.is_file():
+                continue
+            if _is_within(path, managed_root.tracked_dir):
+                continue
+            notebooks.append((managed_root, path))
+
+    notebooks.sort(key=lambda item: str(item[1]))
+    return notebooks
+
+
+def collect_tracked_notebooks(managed_roots: list[ManagedRoot]) -> list[tuple[ManagedRoot, Path]]:
+    notebooks: list[tuple[ManagedRoot, Path]] = []
+    for managed_root in managed_roots:
+        if not managed_root.tracked_dir.exists():
+            continue
+        for path in managed_root.tracked_dir.rglob("*.py"):
+            if path.is_file():
+                notebooks.append((managed_root, path))
+
+    notebooks.sort(key=lambda item: str(item[1]))
+    return notebooks
+
+
+def tracked_path_for_source(source_notebook: Path, managed_root: ManagedRoot) -> Path:
+    relative_path = source_notebook.relative_to(managed_root.source_dir).with_suffix(".py")
+    return managed_root.tracked_dir / relative_path
+
+
+def source_path_for_tracked(tracked_notebook: Path, managed_root: ManagedRoot) -> Path:
+    relative_path = tracked_notebook.relative_to(managed_root.tracked_dir).with_suffix(".ipynb")
+    return managed_root.source_dir / relative_path
+
+
+def is_managed_source_notebook(path: Path, managed_roots: list[ManagedRoot]) -> bool:
+    if path.suffix.lower() != ".ipynb":
+        return False
+
+    for managed_root in managed_roots:
+        if _is_within(path, managed_root.source_dir) and not _is_within(path, managed_root.tracked_dir):
+            return True
+    return False
+
+
+def resolve_tracked_notebook_arg(
+    notebook_arg: str,
+    managed_roots: list[ManagedRoot],
+    root: Path,
+) -> Path | None:
+    candidate_root_relative = root / notebook_arg
+    if candidate_root_relative.exists() and candidate_root_relative.is_file():
+        for managed_root in managed_roots:
+            if _is_within(candidate_root_relative, managed_root.tracked_dir):
+                return candidate_root_relative
+
+    if any(sep in notebook_arg for sep in ("/", "\\\\")):
+        for managed_root in managed_roots:
+            candidate = managed_root.tracked_dir / notebook_arg
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        return None
+
+    matches: list[Path] = []
+    for _, tracked_notebook in collect_tracked_notebooks(managed_roots):
+        if tracked_notebook.name == notebook_arg:
+            matches.append(tracked_notebook)
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
+''',
+        "sync_notebooks.py": '''\
 from __future__ import annotations
 
 from pathlib import Path
 
 import jupytext
 
+from notebook_workflow_config import collect_source_notebooks
+from notebook_workflow_config import load_managed_roots
+from notebook_workflow_config import tracked_path_for_source
+
 
 ROOT = Path(__file__).resolve().parents[2]
-NOTEBOOK_DIR = ROOT / "{notebook_dir}"
-TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
-
-
-def source_notebooks() -> list[Path]:
-    notebooks: list[Path] = []
-    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
-        if not path.is_file():
-            continue
-        if TRACKED_NOTEBOOK_DIR in path.parents:
-            continue
-        notebooks.append(path)
-    return sorted(notebooks)
 
 
 def main() -> int:
-    notebooks = source_notebooks()
+    try:
+        managed_roots = load_managed_roots(ROOT)
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}")
+        return 2
+
+    notebooks = collect_source_notebooks(managed_roots)
     if not notebooks:
-        print("No source notebooks found under {notebook_dir}/.")
+        print("No source notebooks found under configured managed roots.")
         return 0
 
-    for source_notebook in notebooks:
-        relative_path = source_notebook.relative_to(NOTEBOOK_DIR).with_suffix(".py")
-        target_notebook = TRACKED_NOTEBOOK_DIR / relative_path
+    for managed_root, source_notebook in notebooks:
+        target_notebook = tracked_path_for_source(source_notebook, managed_root)
         target_notebook.parent.mkdir(parents=True, exist_ok=True)
 
         notebook_object = jupytext.read(source_notebook)
@@ -286,13 +533,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    sync_target = scripts_dir / "sync_notebooks.py"
-    sync_status = write_text_file(sync_target, sync_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(sync_target, sync_status)
-
-    # Script 2: check_notebook_sync.py
-    check_sync_script = f'''\
+''',
+        "check_notebook_sync.py": '''\
 from __future__ import annotations
 
 import sys
@@ -300,36 +542,32 @@ from pathlib import Path
 
 import jupytext
 
+from notebook_workflow_config import collect_source_notebooks
+from notebook_workflow_config import load_managed_roots
+from notebook_workflow_config import tracked_path_for_source
+
 
 ROOT = Path(__file__).resolve().parents[2]
-NOTEBOOK_DIR = ROOT / "{notebook_dir}"
-TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
-
-
-def source_notebooks() -> list[Path]:
-    notebooks: list[Path] = []
-    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
-        if not path.is_file():
-            continue
-        if TRACKED_NOTEBOOK_DIR in path.parents:
-            continue
-        notebooks.append(path)
-    return sorted(notebooks)
 
 
 def main() -> int:
-    notebooks = source_notebooks()
+    try:
+        managed_roots = load_managed_roots(ROOT)
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
+    notebooks = collect_source_notebooks(managed_roots)
     if not notebooks:
         print("Notebook sync check passed: no source notebooks found.")
         return 0
 
-    for source_notebook in notebooks:
-        relative_path = source_notebook.relative_to(NOTEBOOK_DIR).with_suffix(".py")
-        target_notebook = TRACKED_NOTEBOOK_DIR / relative_path
+    for managed_root, source_notebook in notebooks:
+        target_notebook = tracked_path_for_source(source_notebook, managed_root)
 
         if not target_notebook.exists():
             print(
-                f"Notebook sync check failed for {{source_notebook.relative_to(ROOT)}}. Regenerate it with: pixi run sync",
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync",
                 file=sys.stderr,
             )
             return 1
@@ -339,7 +577,7 @@ def main() -> int:
 
         if regenerated_text != current_text:
             print(
-                f"Notebook sync check failed for {{source_notebook.relative_to(ROOT)}}. Regenerate it with: pixi run sync",
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync",
                 file=sys.stderr,
             )
             return 1
@@ -350,13 +588,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    check_sync_target = scripts_dir / "check_notebook_sync.py"
-    check_sync_status = write_text_file(check_sync_target, check_sync_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(check_sync_target, check_sync_status)
-
-    # Script 3: regenerate_notebooks.py
-    regen_script = f'''\
+''',
+        "regenerate_notebooks.py": '''\
 from __future__ import annotations
 
 import argparse
@@ -365,14 +598,13 @@ from pathlib import Path
 
 import jupytext
 
+from notebook_workflow_config import collect_tracked_notebooks
+from notebook_workflow_config import load_managed_roots
+from notebook_workflow_config import resolve_tracked_notebook_arg
+from notebook_workflow_config import source_path_for_tracked
+
 
 ROOT = Path(__file__).resolve().parents[2]
-NOTEBOOK_DIR = ROOT / "{notebook_dir}"
-TRACKED_NOTEBOOK_DIR = ROOT / "{notebook_dir}" / "{tracked_dir}"
-
-
-def tracked_notebooks() -> list[Path]:
-    return sorted(path for path in TRACKED_NOTEBOOK_DIR.rglob("*.py") if path.is_file())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -384,21 +616,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    try:
+        managed_roots = load_managed_roots(ROOT)
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if args.notebook:
-        tracked_notebook = TRACKED_NOTEBOOK_DIR / args.notebook
-        if not tracked_notebook.exists():
-            print(f"Notebook not found: {{tracked_notebook}}", file=sys.stderr)
+        tracked_notebook = resolve_tracked_notebook_arg(args.notebook, managed_roots, ROOT)
+        if tracked_notebook is None:
+            print(
+                f"Notebook not found or ambiguous: {args.notebook}. "
+                "Try a path relative to repository root, such as 'feature1/notebooks/text/example.py'.",
+                file=sys.stderr,
+            )
             return 1
-        notebooks = [tracked_notebook]
+        notebook_entries = [
+            (managed_root, tracked_notebook)
+            for managed_root, candidate in collect_tracked_notebooks(managed_roots)
+            if candidate == tracked_notebook
+        ]
     else:
-        notebooks = tracked_notebooks()
-        if not notebooks:
-            print("No tracked notebooks found under {notebook_dir}/{tracked_dir}/.")
+        notebook_entries = collect_tracked_notebooks(managed_roots)
+        if not notebook_entries:
+            print("No tracked notebooks found under configured managed roots.")
             return 0
 
-    for tracked_notebook in notebooks:
-        relative_path = tracked_notebook.relative_to(TRACKED_NOTEBOOK_DIR).with_suffix(".ipynb")
-        source_notebook = NOTEBOOK_DIR / relative_path
+    for managed_root, tracked_notebook in notebook_entries:
+        source_notebook = source_path_for_tracked(tracked_notebook, managed_root)
         source_notebook.parent.mkdir(parents=True, exist_ok=True)
 
         notebook_object = jupytext.read(tracked_notebook, fmt="py:percent")
@@ -410,13 +655,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    regen_target = scripts_dir / "regenerate_notebooks.py"
-    regen_status = write_text_file(regen_target, regen_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(regen_target, regen_status)
-
-    # Script 4: check_notebook_policy.py
-    policy_script = f'''\
+''',
+        "check_notebook_policy.py": '''\
 from __future__ import annotations
 
 import argparse
@@ -424,9 +664,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from notebook_workflow_config import is_managed_source_notebook
+from notebook_workflow_config import load_managed_roots
+
 
 ROOT = Path(__file__).resolve().parents[2]
-MANAGED_NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 
 
 def git_list_files(*, staged: bool) -> list[str]:
@@ -436,10 +678,11 @@ def git_list_files(*, staged: bool) -> list[str]:
 
 
 def find_managed_notebook_violations(paths: list[str]) -> list[str]:
+    managed_roots = load_managed_roots(ROOT)
     violations: list[str] = []
     for relative_path in paths:
         candidate = ROOT / relative_path
-        if candidate.suffix.lower() == ".ipynb" and MANAGED_NOTEBOOK_DIR in candidate.parents:
+        if is_managed_source_notebook(candidate, managed_roots):
             violations.append(relative_path)
     return violations
 
@@ -449,13 +692,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staged", action="store_true", help="Check staged files instead of tracked files.")
     args = parser.parse_args(argv)
 
-    violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
+    try:
+        violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if violations:
-        print("Notebook policy violation: .ipynb files should stay in {notebook_dir}/ and not be tracked in git.", file=sys.stderr)
+        print("Notebook policy violation: managed .ipynb files should not be tracked in git.", file=sys.stderr)
         for violation in violations:
-            print(f"  - {{violation}}", file=sys.stderr)
+            print(f"  - {violation}", file=sys.stderr)
         print(
-            "Fix: keep the source notebook local, then run pixi run sync to refresh the tracked .py copy.",
+            "Fix: keep source notebooks local, then run pixi run sync to refresh tracked .py copies.",
             file=sys.stderr,
         )
         return 1
@@ -466,12 +714,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    policy_target = scripts_dir / "check_notebook_policy.py"
-    policy_status = write_text_file(policy_target, policy_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(policy_target, policy_status)
-
-    untrack_script = f'''\
+''',
+        "untrack_managed_notebooks.py": '''\
 from __future__ import annotations
 
 import argparse
@@ -479,12 +723,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+from notebook_workflow_config import is_managed_source_notebook
+from notebook_workflow_config import load_managed_roots
+
 
 ROOT = Path(__file__).resolve().parents[2]
-MANAGED_NOTEBOOK_DIR = ROOT / "{notebook_dir}"
 
 
 def tracked_managed_notebooks() -> list[str]:
+    managed_roots = load_managed_roots(ROOT)
+
     completed = subprocess.run(
         ["git", "ls-files"],
         cwd=ROOT,
@@ -499,7 +747,7 @@ def tracked_managed_notebooks() -> list[str]:
         if not path:
             continue
         candidate = ROOT / path
-        if candidate.suffix.lower() == ".ipynb" and MANAGED_NOTEBOOK_DIR in candidate.parents:
+        if is_managed_source_notebook(candidate, managed_roots):
             tracked.append(path)
     return sorted(tracked)
 
@@ -520,15 +768,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    tracked = tracked_managed_notebooks()
+    try:
+        tracked = tracked_managed_notebooks()
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if not tracked:
         print("No tracked managed .ipynb files found.")
         return 0
 
     print("Managed .ipynb files currently tracked by git:")
     for path in tracked:
-        print(f"  - {{path}}")
-    print(f"\\nTotal tracked managed notebooks: {{len(tracked)}}")
+        print(f"  - {path}")
+    print(f"\\nTotal tracked managed notebooks: {len(tracked)}")
 
     if not args.apply:
         print("\\nPreview mode only. Re-run with --apply to untrack these files.")
@@ -552,12 +805,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    untrack_target = scripts_dir / "untrack_managed_notebooks.py"
-    untrack_status = write_text_file(untrack_target, untrack_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(untrack_target, untrack_status)
-
-    migrate_script = '''\
+''',
+        "migrate_existing_notebooks.py": '''\
 from __future__ import annotations
 
 import argparse
@@ -642,26 +891,30 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-'''
-    migrate_target = scripts_dir / "migrate_existing_notebooks.py"
-    migrate_status = write_text_file(migrate_target, migrate_script, on_existing=on_existing, dry_run=dry_run)
-    report_write(migrate_target, migrate_status)
+''',
+    }
+
+    for filename, content in script_map.items():
+        target = scripts_dir / filename
+        status = write_text_file(target, content, on_existing=on_existing, dry_run=dry_run)
+        report_write(target, status)
 
     print("✓ Script generation completed in tooling/notebook_workflow/")
 
 
-def create_directories(root: Path, notebook_dir: str, tracked_dir: str, *, dry_run: bool) -> None:
-    """Create the notebook directory structure."""
-    notebook_path = root / notebook_dir
-    tracked_path = root / notebook_dir / tracked_dir
+def create_directories(root: Path, source_dirs: list[str], tracked_subdir: str, *, dry_run: bool) -> None:
+    """Create source and tracked notebook directories for all managed roots."""
+    for source_dir in source_dirs:
+        source_path = root / source_dir
+        tracked_path = source_path / tracked_subdir
 
-    if dry_run:
-        print(f"• Dry run would ensure directory: {notebook_path}")
-        print(f"• Dry run would ensure directory: {tracked_path}")
-        return
+        if dry_run:
+            print(f"• Dry run would ensure directory: {source_path}")
+            print(f"• Dry run would ensure directory: {tracked_path}")
+            continue
 
-    tracked_path.mkdir(parents=True, exist_ok=True)
-    print(f"✓ Ensured directory structure: {notebook_dir}/ and {notebook_dir}/{tracked_dir}/")
+        tracked_path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Ensured directory structure: {source_dir}/ and {source_dir}/{tracked_subdir}/")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -672,6 +925,7 @@ def main(argv: list[str] | None = None) -> int:
             Examples:
               python setup_notebook_workflow.py
               python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir .tracked
+                            python setup_notebook_workflow.py --source-dir scripts --source-dir analysis/notebooks --tracked-dir text
               python setup_notebook_workflow.py -n analysis -t .tracked -p 3.12.* -o overwrite
         """),
     )
@@ -686,6 +940,16 @@ def main(argv: list[str] | None = None) -> int:
         "--tracked-dir",
         default="text",
         help="Subdirectory within notebook-dir for tracked .py files (default: text)",
+    )
+    parser.add_argument(
+        "-r",
+        "--source-dir",
+        dest="source_dirs",
+        action="append",
+        help=(
+            "Managed source notebook directory. Repeat to configure multiple roots. "
+            "When provided, --notebook-dir is used only as fallback default."
+        ),
     )
     parser.add_argument(
         "-s",
@@ -718,38 +982,48 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path.cwd()
     try:
+        source_dirs = resolve_source_dirs(args.source_dirs, args.notebook_dir)
+        tracked_subdir = normalize_relative_repo_path(args.tracked_dir, field_name="tracked_dir")
+    except ValueError as exc:
+        print(f"⚠️  {exc}", file=sys.stderr)
+        return 2
+
+    try:
         python_spec, python_spec_source = resolve_python_spec(root, args.python_version)
     except ValueError as exc:
         print(f"⚠️  {exc}", file=sys.stderr)
         return 2
 
     print("\n📋 Setting up notebook workflow...")
-    print(f"   Notebook directory: {args.notebook_dir}/")
-    print(f"   Tracked directory: {args.notebook_dir}/{args.tracked_dir}/\n")
+    print("   Managed source directories:")
+    for source_dir in source_dirs:
+        print(f"     - {source_dir}/")
+    print(f"   Tracked subdirectory (per source): {tracked_subdir}/\n")
     print(f"   Pixi Python: {python_spec} (from {python_spec_source})\n")
 
     # Create configuration files
-    create_directories(root, args.notebook_dir, args.tracked_dir, dry_run=args.dry_run)
+    create_directories(root, source_dirs, tracked_subdir, dry_run=args.dry_run)
 
     try:
         create_pyproject_toml(
             root,
-            args.notebook_dir,
-            args.tracked_dir,
+            source_dirs[0],
+            tracked_subdir,
             python_spec,
             on_existing=args.on_existing,
             dry_run=args.dry_run,
         )
-        create_gitignore(root, args.notebook_dir, on_existing=args.on_existing, dry_run=args.dry_run)
-        create_precommit_config(root, on_existing=args.on_existing, dry_run=args.dry_run)
-        create_github_workflow(root, on_existing=args.on_existing, dry_run=args.dry_run)
-        create_scripts(
+        create_gitignore(root, source_dirs, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_notebook_workflow_config(
             root,
-            args.notebook_dir,
-            args.tracked_dir,
+            source_dirs,
+            tracked_subdir,
             on_existing=args.on_existing,
             dry_run=args.dry_run,
         )
+        create_precommit_config(root, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_github_workflow(root, on_existing=args.on_existing, dry_run=args.dry_run)
+        create_scripts(root, on_existing=args.on_existing, dry_run=args.dry_run)
     except FileExistsError as exc:
         print(f"⚠️  {exc}", file=sys.stderr)
         print("Use --on-existing overwrite to replace managed files, or --on-existing skip to keep them.", file=sys.stderr)
@@ -782,11 +1056,11 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + "=" * 60)
     print("🎉 Notebook workflow is ready!\n")
     print("Next steps:")
-    print(f"  1. Create your first notebook in {args.notebook_dir}/<name>.ipynb")
+    print(f"  1. Create your first notebook in {source_dirs[0]}/<name>.ipynb")
     print(f"  2. Run: pixi run sync")
     print(f"  3. If migrating existing repos: pixi run preview-untrack-managed-notebooks")
     print(f"  4. Or run full migration: pixi run migrate-existing-notebooks")
-    print(f"  5. Commit: git add {args.notebook_dir}/{args.tracked_dir}/")
+    print(f"  5. Commit tracked text notebooks under each managed root's {tracked_subdir}/")
     print("  6. For more info, see README.md")
     print("=" * 60 + "\n")
 

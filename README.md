@@ -49,7 +49,15 @@ python setup_notebook_workflow.py --on-existing skip --dry-run
 python setup_notebook_workflow.py --notebook-dir analysis --tracked-dir text
 ```
 
-### Option E: select Pixi Python version
+### Option E: multiple source directories (existing repos)
+
+```powershell
+python setup_notebook_workflow.py --source-dir scripts --source-dir analysis/notebooks --tracked-dir text --on-existing overwrite
+```
+
+This writes `notebook_workflow_config.json` with both managed roots.
+
+### Option F: select Pixi Python version
 
 ```powershell
 python setup_notebook_workflow.py --python-version 3.12.*
@@ -58,6 +66,7 @@ python setup_notebook_workflow.py --python-version 3.12.*
 Short aliases are also available:
 - `-n` for `--notebook-dir`
 - `-t` for `--tracked-dir`
+- `-r` for `--source-dir` (repeatable)
 - `-p` for `--python-version`
 - `-s` for `--skip-pixi`
 - `-o` for `--on-existing`
@@ -94,6 +103,12 @@ This migration flow:
 ## Multiple notebook roots (supported)
 
 Yes. You can manage more than one notebook source folder in the same repository.
+
+You can configure this during setup with repeated `--source-dir` arguments:
+
+```powershell
+python setup_notebook_workflow.py --source-dir scripts --source-dir analysis/notebooks --tracked-dir text
+```
 
 Edit [notebook_workflow_config.json](notebook_workflow_config.json):
 
