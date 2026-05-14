@@ -5,12 +5,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+from notebook_workflow_config import is_managed_source_notebook
+from notebook_workflow_config import load_managed_roots
+
 
 ROOT = Path(__file__).resolve().parents[1]
-MANAGED_NOTEBOOK_DIR = ROOT / "notebooks"
 
 
 def tracked_managed_notebooks() -> list[str]:
+    managed_roots = load_managed_roots(ROOT)
+
     completed = subprocess.run(
         ["git", "ls-files"],
         cwd=ROOT,
@@ -25,7 +29,7 @@ def tracked_managed_notebooks() -> list[str]:
         if not path:
             continue
         candidate = ROOT / path
-        if candidate.suffix.lower() == ".ipynb" and MANAGED_NOTEBOOK_DIR in candidate.parents:
+        if is_managed_source_notebook(candidate, managed_roots):
             tracked.append(path)
     return sorted(tracked)
 
@@ -46,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    tracked = tracked_managed_notebooks()
+    try:
+        tracked = tracked_managed_notebooks()
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if not tracked:
         print("No tracked managed .ipynb files found.")
         return 0
@@ -72,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         return completed.returncode
 
     print("\nUntracked managed .ipynb files from git index.")
-    print("Run 'pixi run sync-notebooks' and commit the updated tracked .py files.")
+    print("Run 'pixi run sync' and commit the updated tracked .py files.")
     return 0
 
 

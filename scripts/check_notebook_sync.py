@@ -5,36 +5,32 @@ from pathlib import Path
 
 import jupytext
 
+from notebook_workflow_config import collect_source_notebooks
+from notebook_workflow_config import load_managed_roots
+from notebook_workflow_config import tracked_path_for_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_DIR = ROOT / "notebooks"
-TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
-
-
-def source_notebooks() -> list[Path]:
-    notebooks: list[Path] = []
-    for path in NOTEBOOK_DIR.rglob("*.ipynb"):
-        if not path.is_file():
-            continue
-        if TRACKED_NOTEBOOK_DIR in path.parents:
-            continue
-        notebooks.append(path)
-    return sorted(notebooks)
 
 
 def main() -> int:
-    notebooks = source_notebooks()
+    try:
+        managed_roots = load_managed_roots(ROOT)
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
+    notebooks = collect_source_notebooks(managed_roots)
     if not notebooks:
         print("Notebook sync check passed: no source notebooks found.")
         return 0
 
-    for source_notebook in notebooks:
-        relative_path = source_notebook.relative_to(NOTEBOOK_DIR).with_suffix(".py")
-        target_notebook = TRACKED_NOTEBOOK_DIR / relative_path
+    for managed_root, source_notebook in notebooks:
+        target_notebook = tracked_path_for_source(source_notebook, managed_root)
 
         if not target_notebook.exists():
             print(
-                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync-notebooks",
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync",
                 file=sys.stderr,
             )
             return 1
@@ -44,7 +40,7 @@ def main() -> int:
 
         if regenerated_text != current_text:
             print(
-                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync-notebooks",
+                f"Notebook sync check failed for {source_notebook.relative_to(ROOT)}. Regenerate it with: pixi run sync",
                 file=sys.stderr,
             )
             return 1

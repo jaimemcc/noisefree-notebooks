@@ -5,9 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from notebook_workflow_config import is_managed_source_notebook
+from notebook_workflow_config import load_managed_roots
+
 
 ROOT = Path(__file__).resolve().parents[1]
-MANAGED_NOTEBOOK_DIR = ROOT / "notebooks"
 
 
 def git_list_files(*, staged: bool) -> list[str]:
@@ -17,10 +19,11 @@ def git_list_files(*, staged: bool) -> list[str]:
 
 
 def find_managed_notebook_violations(paths: list[str]) -> list[str]:
+    managed_roots = load_managed_roots(ROOT)
     violations: list[str] = []
     for relative_path in paths:
         candidate = ROOT / relative_path
-        if candidate.suffix.lower() == ".ipynb" and MANAGED_NOTEBOOK_DIR in candidate.parents:
+        if is_managed_source_notebook(candidate, managed_roots):
             violations.append(relative_path)
     return violations
 
@@ -30,13 +33,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staged", action="store_true", help="Check staged files instead of tracked files.")
     args = parser.parse_args(argv)
 
-    violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
+    try:
+        violations = find_managed_notebook_violations(git_list_files(staged=args.staged))
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if violations:
-        print("Notebook policy violation: .ipynb files under notebooks/ should not be tracked in git.", file=sys.stderr)
+        print("Notebook policy violation: managed .ipynb files should not be tracked in git.", file=sys.stderr)
         for violation in violations:
             print(f"  - {violation}", file=sys.stderr)
         print(
-            "Fix: keep the source notebook local, then run pixi run sync-notebooks to refresh the tracked .py copy.",
+            "Fix: keep source notebooks local, then run pixi run sync to refresh tracked .py copies.",
             file=sys.stderr,
         )
         return 1

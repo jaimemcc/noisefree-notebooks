@@ -53,6 +53,35 @@ This migration flow:
 3. Syncs notebooks.
 4. Verifies sync and policy checks.
 
+## Multiple notebook roots (supported)
+
+Yes. You can manage more than one notebook source folder in the same repository.
+
+Edit [notebook_workflow_config.json](notebook_workflow_config.json):
+
+```json
+{
+	"managed_roots": [
+		{
+			"source_dir": "feature1/notebooks",
+			"tracked_subdir": "text"
+		},
+		{
+			"source_dir": "feature2/notebooks",
+			"tracked_subdir": "text"
+		}
+	]
+}
+```
+
+Notes:
+- `source_dir` is repository-relative.
+- `tracked_subdir` is created under each `source_dir`.
+- You can also use `tracked_dir` if you want a repository-relative tracked location.
+- All workflow commands (`sync`, `regen`, `check`, policy, untrack, migration) use this config.
+
+If you add new notebook roots, also update `.gitignore` so managed `.ipynb` files stay untracked.
+
 ## After setup (daily use)
 
 1. Edit `notebooks/<name>.ipynb`.

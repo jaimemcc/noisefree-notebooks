@@ -6,14 +6,13 @@ from pathlib import Path
 
 import jupytext
 
+from notebook_workflow_config import collect_tracked_notebooks
+from notebook_workflow_config import load_managed_roots
+from notebook_workflow_config import resolve_tracked_notebook_arg
+from notebook_workflow_config import source_path_for_tracked
+
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_DIR = ROOT / "notebooks"
-TRACKED_NOTEBOOK_DIR = ROOT / "notebooks" / "text"
-
-
-def tracked_notebooks() -> list[Path]:
-    return sorted(path for path in TRACKED_NOTEBOOK_DIR.rglob("*.py") if path.is_file())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,21 +24,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    try:
+        managed_roots = load_managed_roots(ROOT)
+    except ValueError as exc:
+        print(f"Notebook workflow config error: {exc}", file=sys.stderr)
+        return 2
+
     if args.notebook:
-        tracked_notebook = TRACKED_NOTEBOOK_DIR / args.notebook
-        if not tracked_notebook.exists():
-            print(f"Notebook not found: {tracked_notebook}", file=sys.stderr)
+        tracked_notebook = resolve_tracked_notebook_arg(args.notebook, managed_roots, ROOT)
+        if tracked_notebook is None:
+            print(
+                f"Notebook not found or ambiguous: {args.notebook}. "
+                "Try a path relative to repository root, such as 'feature1/notebooks/text/example.py'.",
+                file=sys.stderr,
+            )
             return 1
-        notebooks = [tracked_notebook]
+        notebook_entries = [
+            (managed_root, tracked_notebook)
+            for managed_root, candidate in collect_tracked_notebooks(managed_roots)
+            if candidate == tracked_notebook
+        ]
     else:
-        notebooks = tracked_notebooks()
-        if not notebooks:
-            print("No tracked notebooks found under notebooks/text/.")
+        notebook_entries = collect_tracked_notebooks(managed_roots)
+        if not notebook_entries:
+            print("No tracked notebooks found under configured managed roots.")
             return 0
 
-    for tracked_notebook in notebooks:
-        relative_path = tracked_notebook.relative_to(TRACKED_NOTEBOOK_DIR).with_suffix(".ipynb")
-        source_notebook = NOTEBOOK_DIR / relative_path
+    for managed_root, tracked_notebook in notebook_entries:
+        source_notebook = source_path_for_tracked(tracked_notebook, managed_root)
         source_notebook.parent.mkdir(parents=True, exist_ok=True)
 
         notebook_object = jupytext.read(tracked_notebook, fmt="py:percent")

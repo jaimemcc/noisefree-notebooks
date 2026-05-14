@@ -1,0 +1,8 @@
+{
+  "managed_roots": [
+    {
+      "source_dir": "notebooks",
+      "tracked_subdir": "text"
+    }
+  ]
+}
