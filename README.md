@@ -1,3 +1,14 @@
+## Contributor warning: lockfile and platforms
+
+**IMPORTANT:** If you change dependencies or platforms in pyproject.toml (or pixi.toml), you must run:
+
+```powershell
+pixi lock
+git add pyproject.toml pixi.lock
+git commit -m "Refresh Pixi lockfile for new dependencies/platforms"
+```
+
+If you forget this, CI will fail on `pixi install --locked` for any platform not present in the lockfile (especially linux-64 for GitHub Actions).
 # noisefree-notebooks
 
 Set up a text-first Jupyter workflow in a repository using Pixi + Jupytext.

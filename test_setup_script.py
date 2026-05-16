@@ -182,11 +182,18 @@ python = "3.12.*"
                 print(f"❌ Existing pixi.toml is missing expected workflow entry: {expected_entry}")
                 return False
 
+        # Check that platforms includes both win-64 and linux-64
+        if 'platforms = ["win-64", "linux-64"]' not in pixi_content:
+            print("❌ Existing pixi.toml did not get updated to include linux-64 in platforms")
+            print("pixi.toml content:")
+            print(pixi_content)
+            return False
+
         if "[tool.jupytext]" not in pyproject_content:
             print("❌ pyproject.toml is missing the jupytext config section")
             return False
 
-        print("✓ existing pixi.toml repos get notebook workflow tasks and dependencies")
+        print("✓ existing pixi.toml repos get notebook workflow tasks, dependencies, and platforms")
         return True
 
 

@@ -53,6 +53,8 @@ JUPYTEXT_SECTION = [("tool.jupytext", {"formats": '"ipynb,py:percent"'})]
 
 PYPROJECT_WORKFLOW_SECTIONS = [
     ("tool.jupytext", {"formats": '"ipynb,py:percent"'}),
+    # IMPORTANT: Both win-64 and linux-64 must be present for CI and cross-platform locked installs.
+    # See PIXI_LOCKED_INSTALL_FINDINGS.md for details.
     (
         "tool.pixi.workspace",
         {
@@ -149,12 +151,18 @@ def _merge_toml_sections(existing_text: str, sections: list[tuple[str, dict[str,
                 lines.append("")
             lines.append(f"[{section_name}]")
             for key, value in entries.items():
+                # Always force platforms to both win-64 and linux-64 for workflow sections
+                if key == "platforms":
+                    value = '["win-64", "linux-64"]'
                 lines.append(f"{key} = {value}")
             changed = True
             continue
 
         section_start, section_end = section_bounds
         for key, value in entries.items():
+            # Always force platforms to both win-64 and linux-64 for workflow sections
+            if key == "platforms":
+                value = '["win-64", "linux-64"]'
             desired_line = f"{key} = {value}"
             existing_index: int | None = None
             for index in range(section_start + 1, section_end):
@@ -171,6 +179,11 @@ def _merge_toml_sections(existing_text: str, sections: list[tuple[str, dict[str,
             if lines[existing_index].strip() == desired_line:
                 continue
 
+            # Always update platforms for workflow safety, even if on_existing == 'skip'
+            if key == "platforms":
+                lines[existing_index] = desired_line
+                changed = True
+                continue
             if on_existing == "skip":
                 continue
             if on_existing == "fail":
