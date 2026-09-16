@@ -22,6 +22,7 @@ By default, setup is safe for established repositories:
 - Managed files can be previewed without changes (`--dry-run`).
 - If the repository already uses `pixi.toml`, setup merges the notebook workflow tasks and dependencies into that manifest instead of creating a second Pixi config in `pyproject.toml`.
 - If managed notebooks already exist, setup runs an initial `pixi run sync` after `pixi install` so the first commit starts from an in-sync text copy.
+- Sync and regeneration record paired file hashes in the local, ignored `.notebook_workflow_state.json` cache and refuse to overwrite a representation when both sides changed since the last pairing.
 - The script runs `pixi install` and then `pixi run bootstrap` unless `--skip-pixi` is used.
 
 ## Getting Started
@@ -238,6 +239,8 @@ pixi run check
 ```
 
 4. Commit updates in `notebooks/text/`.
+
+If both the `.ipynb` and `.py` changed, `sync` and `regen` stop with a conflict instead of silently discarding one side. Resolve the files manually, then run the command for the side you want to make authoritative. For an intentional overwrite, use `pixi run sync-notebooks --force` or `pixi run regenerate-notebooks --force`. The local state cache is intentionally not committed; after a fresh clone, the first ambiguous operation will require an explicit choice.
 
 ## Command reference
 

@@ -2,6 +2,7 @@ notebooks/*.ipynb
 notebooks/**/*.ipynb
 .pytest_cache/
 .ruff_cache/
+.notebook_workflow_state.json
 # pixi environments
 .pixi/*
 !.pixi/config.toml

@@ -256,7 +256,7 @@ def test_existing_gitignore_gets_notebook_entries():
             return False
 
         gitignore_content = (test_root / ".gitignore").read_text(encoding="utf-8")
-        for expected_line in ["dist/", "notebooks/**/*.ipynb", ".ipynb_checkpoints/"]:
+        for expected_line in ["dist/", "notebooks/**/*.ipynb", ".ipynb_checkpoints/", ".notebook_workflow_state.json"]:
             if expected_line not in gitignore_content:
                 print(f"❌ Existing .gitignore is missing expected entry: {expected_line}")
                 return False
