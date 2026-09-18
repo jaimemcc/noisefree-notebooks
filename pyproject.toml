@@ -17,6 +17,8 @@ check-notebook-sync = "python tooling/notebook_workflow/check_notebook_sync.py"
 check-notebooks = { depends-on = ["check-notebook-policy", "check-notebook-sync"] }
 sync-notebooks = "python tooling/notebook_workflow/sync_notebooks.py"
 regenerate-notebooks = "python tooling/notebook_workflow/regenerate_notebooks.py"
+sync-notebooks-remove-orphans = "python tooling/notebook_workflow/sync_notebooks.py --remove-orphans"
+regenerate-notebooks-remove-orphans = "python tooling/notebook_workflow/regenerate_notebooks.py --remove-orphans"
 untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py --apply --yes"
 preview-untrack-managed-notebooks = "python tooling/notebook_workflow/untrack_managed_notebooks.py"
 migrate-existing-notebooks-preview = "python tooling/notebook_workflow/migrate_existing_notebooks.py"
@@ -25,6 +27,8 @@ update-notebook-workflow = "python update_notebook_workflow.py --pull-setup --sk
 # Aliases for convenience
 sync = { depends-on = ["sync-notebooks"] }
 regen = { depends-on = ["regenerate-notebooks"] }
+sync-remove-orphans = { depends-on = ["sync-notebooks-remove-orphans"] }
+regen-remove-orphans = { depends-on = ["regenerate-notebooks-remove-orphans"] }
 check = { depends-on = ["check-notebooks"] }
 update = { depends-on = ["update-notebook-workflow"] }
 

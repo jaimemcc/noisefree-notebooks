@@ -9,6 +9,7 @@ from notebook_workflow_config import file_digest
 from notebook_workflow_config import load_workflow_state
 from notebook_workflow_config import load_managed_roots
 from notebook_workflow_config import record_workflow_state
+from notebook_workflow_config import remove_orphaned_notebooks
 from notebook_workflow_config import save_workflow_state
 from notebook_workflow_config import state_key
 from notebook_workflow_config import tracked_path_for_source
@@ -26,6 +27,16 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Sync source .ipynb notebooks to tracked .py files.")
     parser.add_argument("--force", action="store_true", help="Overwrite tracked files when both sides changed.")
+    parser.add_argument(
+        "--remove-orphans",
+        action="store_true",
+        help="Delete .ipynb/.py files that have no counterpart, instead of recreating the missing side.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt when used with --remove-orphans.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -33,6 +44,18 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"Notebook workflow config error: {exc}")
         return 2
+
+    if args.remove_orphans:
+        try:
+            orphan_state = load_workflow_state(ROOT)
+        except ValueError as exc:
+            print(f"Notebook workflow state error: {exc}")
+            return 2
+        deleted = remove_orphaned_notebooks(managed_roots, ROOT, orphan_state, yes=args.yes)
+        if deleted is None:
+            return 1
+        if deleted:
+            save_workflow_state(ROOT, orphan_state)
 
     notebooks = collect_source_notebooks(managed_roots)
     if not notebooks:

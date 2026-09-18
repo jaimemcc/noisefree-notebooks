@@ -149,6 +149,77 @@ def collect_tracked_notebooks(managed_roots: list[ManagedRoot]) -> list[tuple[Ma
     return notebooks
 
 
+@dataclass(frozen=True)
+class OrphanedNotebook:
+    path: Path
+    """File that lacks a counterpart and is a candidate for deletion."""
+    state_key_path: Path
+    """The (real or would-be) source .ipynb path used to key workflow state."""
+    reason: str
+
+
+def find_orphaned_notebooks(managed_roots: list[ManagedRoot]) -> list[OrphanedNotebook]:
+    """Find source .ipynb files with no tracked .py counterpart, and vice versa."""
+    orphaned: list[OrphanedNotebook] = []
+
+    for managed_root, source_notebook in collect_source_notebooks(managed_roots):
+        tracked_notebook = tracked_path_for_source(source_notebook, managed_root)
+        if not tracked_notebook.exists():
+            orphaned.append(
+                OrphanedNotebook(
+                    path=source_notebook,
+                    state_key_path=source_notebook,
+                    reason="no matching .py file",
+                )
+            )
+
+    for managed_root, tracked_notebook in collect_tracked_notebooks(managed_roots):
+        source_notebook = source_path_for_tracked(tracked_notebook, managed_root)
+        if not source_notebook.exists():
+            orphaned.append(
+                OrphanedNotebook(
+                    path=tracked_notebook,
+                    state_key_path=source_notebook,
+                    reason="no matching .ipynb file",
+                )
+            )
+
+    orphaned.sort(key=lambda item: str(item.path))
+    return orphaned
+
+
+def remove_orphaned_notebooks(
+    managed_roots: list[ManagedRoot],
+    root: Path,
+    state: dict,
+    *,
+    yes: bool,
+) -> int | None:
+    """Prompt for confirmation and delete orphaned notebooks. Returns the count deleted,
+    or None if the user declined (or there was nothing to do requires confirmation but aborted)."""
+    orphaned = find_orphaned_notebooks(managed_roots)
+    if not orphaned:
+        print("No orphaned notebooks found.")
+        return 0
+
+    print("The following files have no counterpart and will be DELETED:")
+    for item in orphaned:
+        print(f"  - {item.path.relative_to(root)}  ({item.reason})")
+
+    if not yes:
+        answer = input(f"\nAre you sure you want to delete these {len(orphaned)} file(s)? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Aborted. No files were deleted.")
+            return None
+
+    for item in orphaned:
+        item.path.unlink()
+        state.setdefault("notebooks", {}).pop(state_key(item.state_key_path, root), None)
+
+    print(f"Deleted {len(orphaned)} orphaned file(s).")
+    return len(orphaned)
+
+
 def tracked_path_for_source(source_notebook: Path, managed_root: ManagedRoot) -> Path:
     relative_path = source_notebook.relative_to(managed_root.source_dir).with_suffix(".py")
     return managed_root.tracked_dir / relative_path
